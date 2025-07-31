@@ -26,10 +26,13 @@ if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 # 3. Load CORINE Raster
 # ---------------------------
 corine <- rast(corine_path)
+corine_num <- as.numeric(corine)
+names(corine_num) <- NULL
 
 # Check basic info
 print(corine)
 plot(corine, main = "Original CORINE land cover")
+names(corine)
 
 # print unique class values
 unique_classes <- unique(values(corine))
@@ -41,29 +44,65 @@ print(unique_classes)
 
 # Example: Reclassification 1 – Forest vs. Non-Forest
 # CORINE classes 311, 312, 313 = Forest -> 1; everything else -> 0
+# for chamois
 rcl1 <- matrix(c(
-  0, 999, 0,    # default: everything to 0
-  311, 311, 1,
-  312, 312, 1,
-  313, 313, 1
+  1, 1, 2,     # value 1 → 2
+  2, 5, 1,     # 2–5 → 1 (3 and 5 are present; 4 is absent)
+  6, 7, 0,     # 6–7 → 0
+  8, 9, 1,     # 9 → 1 (8 is absent)
+  10,10, 2,     # 10 → 2
+  11,11, 0      # 11 → 0
 ), ncol = 3, byrow = TRUE)
 
 # Example: Reclassification 2 – Artificial vs. Natural
 # CORINE classes 111–142 = Urban/Artificial -> 1; rest -> 0
+# roe deer 
 rcl2 <- matrix(c(
-  0, 999, 0,
-  111, 142, 1
+  1, 1, 2,    
+  2, 2, 1,
+  3, 3, 1,
+  4, 4, 1,
+  5, 5, 1,
+  6, 6, 1,
+  7, 7, 1,
+  8, 8, 0,
+  9, 9, 0,
+  10, 10, 2,
+  11, 11, 0
 ), ncol = 3, byrow = TRUE)
+
+# red deer
+rcl3 <- matrix(c(
+  1, 1, 2,    
+  2, 2, 1,
+  3, 3, 1,
+  4, 4, 1,
+  5, 5, 1,
+  6, 6, 0,
+  7, 7, 0,
+  8, 8, 0,
+  9, 9, 0,
+  10, 10, 2,
+  11, 11, 0
+), ncol = 3, byrow = TRUE)
+
 
 # ---------------------------
 # 5. Apply Reclassifications
 # ---------------------------
 # Forest binary
-binary_forest <- classify(corine, rcl = rcl1, include.lowest = TRUE)
-names(binary_forest) <- "forest_binary"
+binary_chamois <- terra::classify(
+  corine,
+  rcl = rcl1,
+  include.lowest = TRUE,
+  others = NA  # << das ist entscheidend!
+)
+
+names(binary_chamois) <- "suitability_chamois"
+plot(binary_chamois)
 
 # Urban binary
-binary_urban <- classify(corine, rcl = rcl2, include.lowest = TRUE)
+binary_roe_deer <- classify(corine, rcl = rcl2, include.lowest = TRUE)
 names(binary_urban) <- "urban_binary"
 
 # ---------------------------
