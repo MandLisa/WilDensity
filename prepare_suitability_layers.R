@@ -193,3 +193,4 @@ writeRaster(r2_crop, "/mnt/eo/WilDensity/output/suitability_red_deer.tif", overw
 writeRaster(r3_crop, "/mnt/eo/WilDensity/output/suitability_roe_deer.tif", overwrite = TRUE)
 
 
+#
