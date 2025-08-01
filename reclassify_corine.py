@@ -1,6 +1,7 @@
 # ---------------------------
 # 1. Import Required Libraries
 # ---------------------------
+# %% Cell 1
 import os
 import numpy as np
 import rioxarray as rxr
@@ -8,7 +9,7 @@ import rioxarray as rxr
 # ---------------------------
 # 2. Define File Paths
 # ---------------------------
-
+# %% Cell 2
 # Load CORINE raster via rioxarray
 corine_path = "/mnt/eo/WilDensity/_data/_corine/CLCplus_2018_010m.tif"
 output_dir = "/mnt/eo/WilDensity/output"
@@ -17,12 +18,14 @@ os.makedirs(output_dir, exist_ok=True)
 # ---------------------------
 # 3. Load CORINE Raster
 # ---------------------------
+# %% Cell 3
 corine_xr = rxr.open_rasterio(corine_path, masked=True).squeeze()
 corine_arr = corine_xr.values.copy()
 
 # ---------------------------
 # 4. Define Reclassification Function
 # ---------------------------
+# %% Cell 4
 # Reclassification function
 def reclassify(array, rcl_matrix):
     out = np.full_like(array, fill_value=np.nan, dtype=np.float32)
@@ -34,6 +37,7 @@ def reclassify(array, rcl_matrix):
 # ---------------------------
 # 5. Define Reclassification Matrices
 # ---------------------------
+# %% Cell 5
 rcl_chamois = np.array([
     [1, 1, 2],
     [2, 5, 1],
@@ -80,6 +84,7 @@ reclassifications = {
 # ---------------------------
 # 6. Apply Reclassification and Save
 # ---------------------------
+# %% Cell 6
 for name, rcl in reclassifications.items():
     print(f"Processing {name}...")
     reclass_arr = reclassify(corine_arr, rcl)
@@ -95,6 +100,7 @@ for name, rcl in reclassifications.items():
 # ---------------------------
 # 6. Visualise new rasters
 # ---------------------------
+# %% Cell 7
 # List of raster names
 raster_names = ["binary_chamois", "binary_roe_deer", "binary_red_deer"]
 
