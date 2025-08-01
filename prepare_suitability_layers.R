@@ -11,6 +11,7 @@
 # ---------------------------
 library(terra)  
 library(here)    
+library(sf)
 
 # ---------------------------
 # 2. Define File Paths
@@ -118,3 +119,77 @@ writeRaster(binary_urban, filename = file.path(output_dir, "corine_urban_binary.
 # 7. Done
 # ---------------------------
 cat("Binary rasters successfully created and saved.\n")
+
+
+
+
+### crop suitability layers to reviere
+# Set file paths to the two shapefiles
+shapefile1_path <- "/mnt/eo/WilDensity/_data/_shp/Revier_sbg/reviere_sbg.shp"
+shapefile2_path <- "/mnt/eo/WilDensity/_data/_shp/reviere/reviere.shp"
+
+# Read both shapefiles
+shp1 <- st_read(shapefile1_path)
+shp2 <- st_read(shapefile2_path)
+
+# Check and harmonize the CRS if needed
+if (st_crs(shp1) != st_crs(shp2)) {
+  shp2 <- st_transform(shp2, st_crs(shp1))
+}
+
+# Check column names
+common_cols <- intersect(names(shp1), names(shp2))
+
+# Option 1: Keep only common columns
+shp1_common <- shp1[, common_cols]
+shp2_common <- shp2[, common_cols]
+
+# Option 2 (optional): Check for type mismatches
+# str(shp1_common)
+# str(shp2_common)
+
+# Bind the shapefiles
+merged_shp <- rbind(shp1_common, shp2_common)
+
+# plot
+plot(st_geometry(merged_shp), main = "Merged Geometry")
+
+# Write output
+st_write(merged_shp, "/mnt/eo/WilDensity/_data/_shp/reviere_merged/merged_salzburg_steiermark.shp")
+
+# read merged shape
+merged_shape <- st_read("/mnt/eo/WilDensity/_data/_shp/reviere_merged/merged_salzburg_steiermark.shp")
+
+# Convert to SpatVector (needed for terra cropping)
+merged_vect <- vect(merged_shape)
+
+# ----------------------
+# 2. Read your raster files
+# ----------------------
+r1 <- rast("/mnt/eo/WilDensity/output/binary_chamois.tif")
+r2 <- rast("/mnt/eo/WilDensity/output/binary_red_deer.tif")
+r3 <- rast("/mnt/eo/WilDensity/output/binary_roe_deer.tif")
+
+# ----------------------
+# 3. Crop and mask each raster to shape
+# ----------------------
+# check CRS of vector and raster
+crs(r1)
+crs(merged_vect)
+
+# reporject
+merged_vect_proj <- project(merged_vect, r1)
+
+# crop and mask
+r1_crop <- mask(crop(r1, merged_vect_proj), merged_vect_proj)
+r2_crop <- mask(crop(r2, merged_vect_proj), merged_vect_proj)
+r3_crop <- mask(crop(r3, merged_vect_proj), merged_vect_proj)
+
+# ----------------------
+# 4. (Optional) Write the cropped rasters to disk
+# ----------------------
+writeRaster(r1_crop, "/mnt/eo/WilDensity/output/suitability_chamois.tif", overwrite = TRUE)
+writeRaster(r2_crop, "/mnt/eo/WilDensity/output/suitability_red_deer.tif", overwrite = TRUE)
+writeRaster(r3_crop, "/mnt/eo/WilDensity/output/suitability_roe_deer.tif", overwrite = TRUE)
+
+
