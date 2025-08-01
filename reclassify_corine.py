@@ -1,35 +1,31 @@
-
+# %%
 # ---------------------------
-# %% Cell 1
 # 1. Import Required Libraries
 # ---------------------------
-
 import os
 import numpy as np
 import rioxarray as rxr
 import matplotlib.pyplot as plt
 
+# %%
 # ---------------------------
-# %% Cell 2
 # 2. Define File Paths
 # ---------------------------
-# Load CORINE raster via rioxarray
 corine_path = "/mnt/eo/WilDensity/_data/_corine/CLCplus_2018_010m.tif"
 output_dir = "/mnt/eo/WilDensity/output"
 os.makedirs(output_dir, exist_ok=True)
 
+# %%
 # ---------------------------
-# %% Cell 3
 # 3. Load CORINE Raster
 # ---------------------------
 corine_xr = rxr.open_rasterio(corine_path, masked=True).squeeze()
 corine_arr = corine_xr.values.copy()
 
+# %%
 # ---------------------------
-# %% Cell 4
 # 4. Define Reclassification Function
 # ---------------------------
-# Reclassification function
 def reclassify(array, rcl_matrix):
     out = np.full_like(array, fill_value=np.nan, dtype=np.float32)
     for from_val, to_val, new_val in rcl_matrix:
@@ -37,9 +33,9 @@ def reclassify(array, rcl_matrix):
         out[mask] = new_val
     return out
 
+# %%
 # ---------------------------
-# %% Cell 5
-# 5. Define Reclassification Matrices
+# 5. Reclassification Matrices
 # ---------------------------
 rcl_chamois = np.array([
     [1, 1, 2],
@@ -84,9 +80,9 @@ reclassifications = {
     "binary_red_deer": rcl_red_deer
 }
 
+# %%
 # ---------------------------
-# %% Cell 6
-# 6. Apply Reclassification and Save
+# 6. Apply Reclassification and Save Rasters
 # ---------------------------
 for name, rcl in reclassifications.items():
     print(f"Processing {name}...")
@@ -98,30 +94,15 @@ for name, rcl in reclassifications.items():
     out_path = os.path.join(output_dir, f"{name}.tif")
     reclass_xr.rio.to_raster(out_path, dtype="float32", compress="LZW", nodata=np.nan)
     print(f"Saved to {out_path}")
-    
 
+# %%
 # ---------------------------
-
-# %% Cell 7
-# 6. Visualise new rasters
+# 7. Lazy Load and Plot a Subset of Gämse Raster
 # ---------------------------
-import rioxarray as rxr
-import matplotlib.pyplot as plt
+# Re-open one raster without Dask chunks
+chamois_path = os.path.join(output_dir, "binary_chamois.tif")
+chamois_xr = rxr.open_rasterio(chamois_path, masked=True).squeeze()
 
-# Lazy Load mit Dask
-chamois_xr = rxr.open_rasterio(
-    "/mnt/eo/WilDensity/output/binary_chamois.tif",
-    masked=True,
-    chunks={"x": 1024, "y": 1024}  # Anpassen je nach Server
-).squeeze()
-
-# Optional: Lade nur einen kleinen Teil in den Speicher
-# subset = chamois_xr.isel(x=slice(0, 2000), y=slice(0, 2000))  # falls vollständiges Plotten zu langsam ist
-
-# Plot
-chamois_xr.plot(cmap="viridis", figsize=(10, 8))
-plt.title("Chamois Habitat")
-plt.show()
-
-
+sample = chamois_xr.isel(x=slice(0, 500), y=slice(0, 500))
+print("Unique values in small sample:", np.unique(sample.values[~np.isnan(sample.values)]))
 # %%
