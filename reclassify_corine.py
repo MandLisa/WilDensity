@@ -3,15 +3,13 @@
 # ---------------------------
 import os
 import numpy as np
-import rasterio
-import matplotlib.pyplot as plt
-from rasterio.enums import Resampling
-from rasterio.plot import show
-from matplotlib.colors import ListedColormap
+import rioxarray as rxr
 
 # ---------------------------
 # 2. Define File Paths
 # ---------------------------
+
+# Load CORINE raster via rioxarray
 corine_path = "/mnt/eo/WilDensity/_data/_corine/CLCplus_2018_010m.tif"
 output_dir = "/mnt/eo/WilDensity/output"
 os.makedirs(output_dir, exist_ok=True)
@@ -19,25 +17,24 @@ os.makedirs(output_dir, exist_ok=True)
 # ---------------------------
 # 3. Load CORINE Raster
 # ---------------------------
-with rasterio.open(corine_path) as src:
-    corine = src.read(1)
-    profile = src.profile.copy()
+corine_xr = rxr.open_rasterio(corine_path, masked=True).squeeze()
+corine_arr = corine_xr.values.copy()
 
 # ---------------------------
 # 4. Define Reclassification Function
 # ---------------------------
-def reclassify(data, rcl_matrix):
-    out = np.full_like(data, fill_value=np.nan, dtype=np.float32)
+# Reclassification function
+def reclassify(array, rcl_matrix):
+    out = np.full_like(array, fill_value=np.nan, dtype=np.float32)
     for from_val, to_val, new_val in rcl_matrix:
-        mask = (data >= from_val) & (data <= to_val)
+        mask = (array >= from_val) & (array <= to_val)
         out[mask] = new_val
     return out
 
 # ---------------------------
 # 5. Define Reclassification Matrices
 # ---------------------------
-# Format: from, to, becomes
-rcl1 = np.array([  # Chamois
+rcl_chamois = np.array([
     [1, 1, 2],
     [2, 5, 1],
     [6, 7, 0],
@@ -46,7 +43,7 @@ rcl1 = np.array([  # Chamois
     [11, 11, 0]
 ])
 
-rcl2 = np.array([  # Roe deer
+rcl_roe_deer = np.array([
     [1, 1, 2],
     [2, 2, 1],
     [3, 3, 1],
@@ -60,7 +57,7 @@ rcl2 = np.array([  # Roe deer
     [11, 11, 0]
 ])
 
-rcl3 = np.array([  # Red deer
+rcl_red_deer = np.array([
     [1, 1, 2],
     [2, 2, 1],
     [3, 3, 1],
@@ -74,37 +71,43 @@ rcl3 = np.array([  # Red deer
     [11, 11, 0]
 ])
 
+reclassifications = {
+    "binary_chamois": rcl_chamois,
+    "binary_roe_deer": rcl_roe_deer,
+    "binary_red_deer": rcl_red_deer
+}
+
 # ---------------------------
 # 6. Apply Reclassification and Save
 # ---------------------------
-reclass_schemes = {
-    "binary_chamois": rcl1,
-    "binary_roe_deer": rcl2,
-    "binary_red_deer": rcl3
-}
+for name, rcl in reclassifications.items():
+    print(f"Processing {name}...")
+    reclass_arr = reclassify(corine_arr, rcl)
 
-profile.update(dtype='float32', count=1, compress='lzw', nodata=np.nan)
+    reclass_xr = corine_xr.copy(deep=True)
+    reclass_xr.values = reclass_arr
 
-for name, matrix in reclass_schemes.items():
-    reclassed = reclassify(corine, matrix)
-    output_path = os.path.join(output_dir, f"{name}.tif")
-    with rasterio.open(output_path, 'w', **profile) as dst:
-        dst.write(reclassed, 1)
-    print(f"Saved: {output_path}")
-
+    out_path = os.path.join(output_dir, f"{name}.tif")
+    reclass_xr.rio.to_raster(out_path, dtype="float32", compress="LZW", nodata=np.nan)
+    print(f"Saved to {out_path}")
+    
+  
 # ---------------------------
-# 7. Plot Original CORINE Raster
+# 6. Visualise new rasters
 # ---------------------------
+# List of raster names
+raster_names = ["binary_chamois", "binary_roe_deer", "binary_red_deer"]
 
-# Unique classes in CORINE
-classes = sorted(np.unique(corine[~np.isnan(corine)]).astype(int))
+for name in raster_names:
+    path = os.path.join(output_dir, f"{name}.tif")
+    print(f"Loading {name} from: {path}")
 
-# Generate a discrete color map
-n_classes = len(classes)
-cmap = ListedColormap(plt.cm.get_cmap("tab20", n_classes).colors)
-plt.figure(figsize=(10, 8))
-im = plt.imshow(corine, cmap=cmap)
-plt.title("Original CORINE Land Cover")
-plt.colorbar(im, label="CORINE Class Code", ticks=classes)
-plt.axis("off")
-plt.show()
+    # Load raster
+    xr = rxr.open_rasterio(path, masked=True).squeeze()
+
+    # Plot
+    plt.figure(figsize=(8, 6))
+    xr.plot(cmap="viridis")  # You can change to cmap='tab10', 'gray', etc.
+    plt.title(name.replace("_", " ").title())
+    plt.axis("off")
+    plt.show()
