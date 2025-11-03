@@ -519,43 +519,332 @@ vals <- data.frame(
 )
 
 ## 5) Mit Revier-Shapefile kombinieren
-suitability_per_revier_100 <- merge(merged_vect_proj, vals, by = "revier_ID")
+suitability_per_revier_100_w <- merge(merged_vect_proj, vals, by = "revier_ID")
 
 writeVector(
-  suitability_per_revier_100,
-  "/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp",
+  suitability_per_revier_100_w,
+  "/mnt/eo/WilDensity/output/suitability_per_revier_0311_w.shp",
   overwrite = TRUE
 )
 
-suitability_per_revier <- st_read("/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp")
+#suitability_per_revier_100_w <- st_read("/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp")
+
+# SpatVector → sf
+suitability_sf_100_w <- sf::st_as_sf(suitability_per_revier_100_w)
+
+# metrische Projektion (z.B. EPSG:3035)
+suitability_sf_100_w <- st_transform(suitability_sf_100_w, 3035)
+
+# exakte Revierfläche in ha (Polygonfläche)
+suitability_sf_100_w$revier_area_ha <-
+  as.numeric(st_area(suitability_sf_100_w)) / 1e4
+
+# Anteile geeigneter Fläche in % (flächengewichtet, 0–100)
+suitability_sf_100_w$share_chamois_percent <-
+  100 * suitability_sf_100_w$area_chamois_ha / suitability_sf_100_w$revier_area_ha
+
+suitability_sf_100_w$share_reddeer_percent <-
+  100 * suitability_sf_100_w$area_reddeer_ha / suitability_sf_100_w$revier_area_ha
+
+suitability_sf_100_w$share_roedeer_percent <-
+  100 * suitability_sf_100_w$area_roedeer_ha / suitability_sf_100_w$revier_area_ha
+
+# Geometrie vereinfachen (optional)
+suitability_sf_100_simplified_w <- st_simplify(suitability_sf_100_w, dTolerance = 100)
+
+# Sicherstellen, dass die Anteile rein numerisch sind
+suitability_sf_100_simplified_w$share_chamois_percent <-
+  as.numeric(suitability_sf_100_simplified_w$share_chamois_percent)
+
+suitability_sf_100_simplified_w$share_reddeer_percent <-
+  as.numeric(suitability_sf_100_simplified_w$share_reddeer_percent)
+
+suitability_sf_100_simplified_w$share_roedeer_percent <-
+  as.numeric(suitability_sf_100_simplified_w$share_roedeer_percent)
+
+
+
+### plot
+# Chamois
+ggplot(suitability_sf_100_simplified_w) +
+  geom_sf(aes(fill = share_chamois_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for red deer",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/chamois_relativ_100m.png", width = 8, height = 6, units = "in", dpi = 300)
+
+
+# Red deer
+ggplot(suitability_sf_100_simplified_w) +
+  geom_sf(aes(fill = share_reddeer_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for red deer",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/red_deer_relativ_100m.png", width = 8, height = 6, units = "in", dpi = 300)
+
+# Roe deer
+ggplot(suitability_sf_100_simplified_w) +
+  geom_sf(aes(fill = share_roedeer_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for roe deer",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/roe_deer_relativ_100m.png", width = 8, height = 6, units = "in", dpi = 300)
+
+
+### histograms
+# If share_reddeer_percent is already in percent (0–100):
+p_reddeer <- ggplot(suitability_sf_100_simplified_w,
+                    aes(x = share_reddeer_percent)) +
+  geom_histogram(
+    aes(fill = ..x..),          # map fill to x → continuous viridis scale
+    bins  = 30,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(
+    option    = "F",
+    direction = -1,
+    na.value  = "grey90"
+  ) +
+  labs(
+    title = "",
+    x     = "Suitable area (%)",
+    y     = "Frequency"
+  ) +
+  xlim(0, 100) +
+  ylim(0, 500) +
+  theme_minimal(base_size = 20) +
+  guides(fill = "none")  # legend not needed for the histogram
+
+# draw it to the screen (optional)
+print(p_reddeer)
+
+### same for roe deer
+p_roedeer <- ggplot(suitability_sf_100_simplified_w,
+                    aes(x = share_roedeer_percent)) +
+  geom_histogram(
+    aes(fill = ..x..),          # map fill to x → continuous viridis scale
+    bins  = 30,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(
+    option    = "F",
+    direction = -1,
+    na.value  = "grey90"
+  ) +
+  labs(
+    title = "",
+    x     = "Suitable area (%)",
+    y     = "Frequency"
+  ) +
+  xlim(0, 100) +
+  ylim(0, 500) +
+  theme_minimal(base_size = 20) +
+  guides(fill = "none")  # legend not needed for the histogram
+
+# draw it to the screen (optional)
+print(p_roedeer)
+
+# same for chamois
+p_chamois <- ggplot(suitability_sf_100_simplified_w,
+                    aes(x = share_chamois_percent)) +
+  geom_histogram(
+    aes(fill = ..x..),          # map fill to x → continuous viridis scale
+    bins  = 30,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(
+    option    = "F",
+    direction = -1,
+    na.value  = "grey90"
+  ) +
+  labs(
+    title = "",
+    x     = "Suitable area (%)",
+    y     = "Frequency"
+  ) +
+  xlim(0, 100) +
+  ylim(0, 500) +
+  theme_minimal(base_size = 20) +
+  guides(fill = "none")  # legend not needed for the histogram
+
+# draw it to the screen (optional)
+print(p_chamois)
+
+
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/histo_reddeer_new.png", p_reddeer, width = 4.2, height = 3, units = "in", dpi = 300)
+ggsave("/mnt/eo/WilDensity/_figs/histo_roedeer_new.png", p_roedeer, width = 4.2, height = 3, units = "in", dpi = 300)
+ggsave("/mnt/eo/WilDensity/_figs/histo_chamois_new.png", p_chamois, width = 4.2, height = 3, units = "in", dpi = 300)
+
+
+# If share_reddeer_percent is already in percent (0–100):
+hist(
+  suitability_sf_simplified$share_roedeer_percent,
+  breaks = 30,
+  main   = "Distribution of roe deer habitat share",
+  xlab   = "Share of suitable area for ror deer (%)",
+  ylab   = "Frequency"
+)
+
+
+# If share_reddeer_percent is already in percent (0–100):
+hist(
+  suitability_sf_simplified$share_chamois_percent,
+  breaks = 30,
+  main   = "Distribution of chamois habitat share",
+  xlab   = "Share of suitable area for chamois (%)",
+  ylab   = "Frequency"
+)
 
 #-------------------------------------------------------------------------------
 
+# Chamois
+ggplot(suitability_sf_10_simplified) +
+  geom_sf(aes(fill = share_chamois_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for chamois",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/chamois_relativ_10m.png", width = 8, height = 6, units = "in", dpi = 300)
+
+
+# Red deer
+ggplot(suitability_sf_10_simplified) +
+  geom_sf(aes(fill = share_reddeer_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for red deer",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/red_deer_relativ_10m.png", width = 8, height = 6, units = "in", dpi = 300)
+
+# Roe deer
+ggplot(suitability_sf_10_simplified) +
+  geom_sf(aes(fill = share_roedeer_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for roe deer",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/roe_deer_relativ_10m.png", width = 8, height = 6, units = "in", dpi = 300)
+
+
+
+# Chamois
+ggplot(suitability_sf_100_simplified_w) +
+  geom_sf(aes(fill = share_chamois_percent)) +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
+  theme_minimal(base_size = 14) +
+  labs(title = "Relative habitat suitability for chamois",
+       fill = "Share of suitable area (%)")
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/chamois_relativ_100m.png", width = 8, height = 6, units = "in", dpi = 300)
 
 
 
 
-# Plot chamois habitat area
-ggplot(suitability_sf) +
-  geom_sf(aes(fill = area_chamois_ha)) +
-  scale_fill_viridis_c(option = "C") +
-  theme_minimal() +
-  labs(title = "Suitable area per revier for chamois",
-       fill = "Area (ha)")
+### histograms
+# If share_reddeer_percent is already in percent (0–100):
+p_reddeer_10 <- ggplot(suitability_sf_10_simplified,
+                       aes(x = share_reddeer_percent)) +
+  geom_histogram(
+    aes(fill = ..x..),          # map fill to x → continuous viridis scale
+    bins  = 30,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(
+    option    = "F",
+    direction = -1,
+    na.value  = "grey90"
+  ) +
+  labs(
+    title = "",
+    x     = "Suitable area (%)",
+    y     = "Frequency"
+  ) +
+  xlim(0, 100) +
+  ylim(0, 500) +
+  theme_minimal(base_size = 20) +
+  guides(fill = "none")  # legend not needed for the histogram
 
-# Repeat for red deer
-ggplot(suitability_sf) +
-  geom_sf(aes(fill = area_reddeer_ha)) +
-  scale_fill_viridis_c(option = "C") +
-  theme_minimal() +
-  labs(title = "Suitable area for Red Deer",
-       fill = "Area (ha)")
+# draw it to the screen (optional)
+print(p_reddeer_10)
 
-# Repeat for roe deer
-ggplot(suitability_sf) +
-  geom_sf(aes(fill = area_roedeer_ha)) +
-  scale_fill_viridis_c(option = "C") +
-  theme_minimal() +
-  labs(title = "Suitable Area for Roe Deer",
-       fill = "Area (ha)")
+### same for roe deer
+p_roedeer_10 <- ggplot(suitability_sf_10_simplified,
+                       aes(x = share_roedeer_percent)) +
+  geom_histogram(
+    aes(fill = ..x..),          # map fill to x → continuous viridis scale
+    bins  = 30,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(
+    option    = "F",
+    direction = -1,
+    na.value  = "grey90"
+  ) +
+  labs(
+    title = "",
+    x     = "Suitable area (%)",
+    y     = "Frequency"
+  ) +
+  xlim(0, 100) +
+  ylim(0, 500) +
+  theme_minimal(base_size = 20) +
+  guides(fill = "none")  # legend not needed for the histogram
+
+# draw it to the screen (optional)
+print(p_roedeer_10)
+
+# same for chamois
+p_chamois_10 <- ggplot(suitability_sf_10_simplified,
+                       aes(x = share_chamois_percent)) +
+  geom_histogram(
+    aes(fill = ..x..),          # map fill to x → continuous viridis scale
+    bins  = 30,
+    color = "black"
+  ) +
+  scale_fill_viridis_c(
+    option    = "F",
+    direction = -1,
+    na.value  = "grey90"
+  ) +
+  labs(
+    title = "",
+    x     = "Suitable area (%)",
+    y     = "Frequency"
+  ) +
+  xlim(0, 100) +
+  ylim(0, 500) +
+  theme_minimal(base_size = 20) +
+  guides(fill = "none")  # legend not needed for the histogram
+
+# draw it to the screen (optional)
+print(p_chamois_10)
+
+# Save with custom size and resolution
+ggsave("/mnt/eo/WilDensity/_figs/histo_reddeer_10.png", p_reddeer_10, width = 4.2, height = 3, units = "in", dpi = 300)
+ggsave("/mnt/eo/WilDensity/_figs/histo_roedeer_10.png", p_roedeer_10, width = 4.2, height = 3, units = "in", dpi = 300)
+ggsave("/mnt/eo/WilDensity/_figs/histo_chamois_10.png", p_chamois_10, width = 4.2, height = 3, units = "in", dpi = 300)
+
+
+
+
+
+
 
