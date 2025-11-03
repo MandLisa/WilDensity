@@ -13,6 +13,7 @@ library(terra)
 library(here)    
 library(sf)
 library(ggplot2)
+library(units)
 
 # ---------------------------
 # 2. Define File Paths
