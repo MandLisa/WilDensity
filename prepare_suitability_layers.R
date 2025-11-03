@@ -469,6 +469,70 @@ hist(
 )
 
 
+#-------------------------------------------------------------------------------
+### compute area-weighted sums for 100m CORINE
+
+## 0) Eindeutige ID (wie bisher)
+merged_vect_proj$revier_ID <- 1:nrow(merged_vect_proj)
+
+## 1) Zellfläche aus dem Raster ableiten (gilt für alle drei, wenn gleiches Grid)
+cell_area_m2 <- prod(res(chamois_crop))   # z.B. 100 * 100 = 10000 m²
+cell_area_ha <- cell_area_m2 / 1e4        # bei 100 m → 1 ha
+
+## 2) Hilfsfunktion: flächengewichtete geeignete Fläche (in ha) pro Revier
+compute_weighted_area <- function(r_bin, v) {
+  # r_bin: binäres SpatRaster (0/1, 1 = geeignet)
+  # v    : SpatVector mit Revieren
+  
+  tab <- terra::extract(
+    r_bin,
+    v,
+    exact   = TRUE,   # Zelle wird geschnitten
+    weights = TRUE    # Spalte "weight" = Flächenanteil der Zelle im Polygon
+  )
+  # Spalten: ID, <layer>, weight
+  layer_name <- names(r_bin)[1]
+  names(tab)[2] <- "value"  # 0/1 geeignet
+  
+  # flächengewichtete Summe: value * weight * Zellfläche
+  area_m2 <- aggregate(value * weight * cell_area_m2 ~ ID,
+                       data = tab, FUN = sum, na.rm = TRUE)
+  names(area_m2)[2] <- "area_ha"
+  area_m2$area_ha <- area_m2$area_ha / 1e4   # m² → ha
+  
+  # ID entspricht Zeilenindex in merged_vect_proj
+  area_m2$revier_ID <- area_m2$ID
+  area_m2
+}
+
+## 3) Für alle drei Arten anwenden (binäre Raster: == 1)
+z_chamois  <- compute_weighted_area(chamois_crop  == 1, merged_vect_proj)
+z_reddeer  <- compute_weighted_area(reddeer_crop  == 1, merged_vect_proj)
+z_roedeer  <- compute_weighted_area(roedeer_crop  == 1, merged_vect_proj)
+
+## 4) Werte in ein gemeinsames Dataframe bringen
+vals <- data.frame(
+  revier_ID       = merged_vect_proj$revier_ID,
+  area_chamois_ha = z_chamois$area_ha[match(merged_vect_proj$revier_ID, z_chamois$revier_ID)],
+  area_reddeer_ha = z_reddeer$area_ha[match(merged_vect_proj$revier_ID, z_reddeer$revier_ID)],
+  area_roedeer_ha = z_roedeer$area_ha[match(merged_vect_proj$revier_ID, z_roedeer$revier_ID)]
+)
+
+## 5) Mit Revier-Shapefile kombinieren
+suitability_per_revier_100 <- merge(merged_vect_proj, vals, by = "revier_ID")
+
+writeVector(
+  suitability_per_revier_100,
+  "/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp",
+  overwrite = TRUE
+)
+
+suitability_per_revier <- st_read("/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp")
+
+#-------------------------------------------------------------------------------
+
+
+
 
 
 # Plot chamois habitat area
