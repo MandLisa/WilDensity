@@ -13,13 +13,15 @@ library(terra)
 library(here)    
 library(sf)
 library(ggplot2)
-library(units)
+
 
 # ---------------------------
 # 2. Define File Paths
 # ---------------------------
 # Adjust this path to your local CORINE raster file
 corine_path <- "/mnt/eo/WilDensity/_data/_corine/U2018_CLC2018_V2020_20u1.tif"
+corine_path <- "/mnt/eo/WilDensity/_data/_corine/CLCplus_2018_010m.tif"
+
 # "/mnt/eo/WilDensity/_data/_corine/CLCplus_2018_010m.tif"
 # Output directory
 output_dir <- "/mnt/eo/WilDensity/output"
@@ -47,6 +49,7 @@ merged_vect <- vect(merged_shape)
 print(corine)
 # keep 1..41, set everything else to NA
 corine_1_41 <- ifel(corine >= 1 & corine <= 41, corine, NA)
+corine_1_11 <- ifel(corine >= 1 & corine <= 11, corine, NA)
 
 plot(corine_1_41,
      main = "CORINE land cover (classes 1–41)",
@@ -184,9 +187,15 @@ st_write(merged_shp, "/mnt/eo/WilDensity/_data/_shp/reviere_merged/merged_salzbu
 # ----------------------
 # 2. Read your raster files
 # ----------------------
+# 100m 
 chamois <- rast("/mnt/eo/WilDensity/output/chamois_binary.tif")
 reddeer <- rast("/mnt/eo/WilDensity/output/reddeer_binary.tif")
 roedeer <- rast("/mnt/eo/WilDensity/output/roedeer_binary.tif")
+
+### 10m
+chamois <- rast("/mnt/eo/WilDensity/output/binary_chamois.tif")
+reddeer <- rast("/mnt/eo/WilDensity/output/binary_red_deer.tif")
+roedeer <- rast("/mnt/eo/WilDensity/output/binary_roe_deer.tif")
 
 # ----------------------
 # 3. Crop and mask each raster to shape
@@ -206,9 +215,10 @@ roedeer_crop <- mask(crop(roedeer, merged_vect_proj), merged_vect_proj)
 # ----------------------
 # 4. (Optional) Write the cropped rasters to disk
 # ----------------------
-writeRaster(chamois_crop, "/mnt/eo/WilDensity/output/suitability_chamois_0311.tif", overwrite = TRUE)
-writeRaster(reddeer_crop, "/mnt/eo/WilDensity/output/suitability_red_deer_0311.tif", overwrite = TRUE)
-writeRaster(roedeer_crop, "/mnt/eo/WilDensity/output/suitability_roe_deer_0311.tif", overwrite = TRUE)
+writeRaster(chamois_crop, "/mnt/eo/WilDensity/output/suitability_chamois_10m.tif", overwrite = TRUE)
+writeRaster(reddeer_crop, "/mnt/eo/WilDensity/output/suitability_red_deer_10m.tif", overwrite = TRUE)
+writeRaster(roedeer_crop, "/mnt/eo/WilDensity/output/suitability_roe_deer_10m.tif", overwrite = TRUE)
+
 
 # Eindeutige ID (falls noch nicht vorhanden)
 merged_vect_proj$revier_ID <- 1:nrow(merged_vect_proj)
@@ -224,9 +234,14 @@ z_chamois  <- extract(chamois_crop  == 1, merged_vect_proj, fun = sum, na.rm = T
 z_reddeer  <- extract(reddeer_crop  == 1, merged_vect_proj, fun = sum, na.rm = TRUE)
 z_roedeer  <- extract(roedeer_crop  == 1, merged_vect_proj, fun = sum, na.rm = TRUE)
 
-z_chamois$area_chamois_ha <- z_chamois$n_chamois        # 100x100 m → 1 ha per pixel
-z_reddeer$area_reddeer_ha <- z_reddeer$n_red_deer
-z_roedeer$area_roe_deer_ha<- z_roedeer$n_roe_deer
+# Spaltennamen setzen
+names(z_chamois)[2] <- "n_chamois"
+names(z_reddeer)[2] <- "n_red_deer"
+names(z_roedeer)[2] <- "n_roe_deer"
+
+z_chamois$area_chamois_ha <- z_chamois$n_chamois * 0.01        
+z_reddeer$area_reddeer_ha <- z_reddeer$n_red_deer * 0.01 
+z_roedeer$area_roe_deer_ha<- z_roedeer$n_roe_deer * 0.01 
 
 # Spaltennamen setzen
 names(z_chamois)[2] <- "n_chamois"
@@ -260,9 +275,9 @@ vals <- data.frame(
 )
 
 # Mit Revier-Shapefile kombinieren
-suitability_per_revier_100 <- merge(merged_vect_proj, vals, by = "revier_ID")
+suitability_per_revier_10 <- merge(merged_vect_proj, vals, by = "revier_ID")
 
-writeVector(suitability_per_revier_100, "/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp", overwrite = TRUE)
+writeVector(suitability_per_revier_10, "/mnt/eo/WilDensity/output/suitability_per_revier_2611.shp", overwrite = TRUE)
 
 
 suitability_per_revier <- st_read("/mnt/eo/WilDensity/output/suitability_per_revier_0311.shp")
@@ -270,31 +285,31 @@ suitability_per_revier <- st_read("/mnt/eo/WilDensity/output/suitability_per_rev
 
 ### visualise
 # Convert SpatVector to sf if needed
-suitability_sf_100 <- sf::st_as_sf(suitability_per_revier_100)
+suitability_sf_10 <- sf::st_as_sf(suitability_per_revier_10)
 
 # Stelle sicher, dass dein Objekt in Meter projiziert ist (z. B. EPSG:3035, LAEA Europe)
-suitability_sf_100 <- st_transform(suitability_sf_100, 3035)
+suitability_sf_10 <- st_transform(suitability_sf_10, 3035)
 
 # Fläche in Hektar berechnen (1 ha = 10.000 m²)
 # area in ha as plain numeric
-suitability_sf_100$revier_area_ha <-
-  as.numeric(st_area(suitability_sf_100)) / 1e4
+suitability_sf_10$revier_area_ha <-
+  as.numeric(st_area(suitability_sf_10)) / 1e4
 
 # Fläche geeigneter Pixel in ha (1 Pixel = 10 x 10 m = 100 m² = 0.01 ha)
-suitability_sf_100$share_chamois_percent <-
-  100 * suitability_sf_100$area_chamois_ha / suitability_sf_100$revier_area_ha
+suitability_sf_10$share_chamois_percent <-
+  100 * suitability_sf_10$area_chamois_ha / suitability_sf_10$revier_area_ha
 
-suitability_sf_100$share_roedeer_percent <-
-  100 * suitability_sf_100$area_roedeer_ha / suitability_sf_100$revier_area_ha
+suitability_sf_10$share_roedeer_percent <-
+  100 * suitability_sf_10$area_roedeer_ha / suitability_sf_10$revier_area_ha
 
-suitability_sf_100$share_reddeer_percent <-
-  100 * suitability_sf_100$area_reddeer_ha / suitability_sf_100$revier_area_ha
+suitability_sf_10$share_reddeer_percent <-
+  100 * suitability_sf_10$area_reddeer_ha / suitability_sf_10$revier_area_ha
 
 
 # Fläche geeigneter Pixel in ha (1 Pixel = 10 x 10 m = 100 m² = 0.01 ha)
-suitability_sf_100$area_chamois_ha <- suitability_sf_100$n_chamois 
-suitability_sf_100$area_reddeer_ha <- suitability_sf_100$n_reddeer 
-suitability_sf_100$area_roedeer_ha <- suitability_sf_100$n_roedeer 
+suitability_sf_10$area_chamois_ha <- suitability_sf_10$n_chamois 
+suitability_sf_10$area_reddeer_ha <- suitability_sf_10$n_reddeer 
+suitability_sf_10$area_roedeer_ha <- suitability_sf_10$n_roedeer 
 
 # für 10 x 10m pixel: suitability_sf$n_roedeer * 0.01
 
@@ -306,16 +321,21 @@ suitability_sf_100$share_roedeer_percent <- 100 * suitability_sf_100$area_roedee
 
 
 # Simplify geometry (tolerance in units of CRS – e.g., meters)
-suitability_sf_100_simplified <- st_simplify(suitability_sf_100, dTolerance = 100)
+suitability_sf_10_simplified <- st_simplify(suitability_sf_10, dTolerance = 100)
 
-suitability_sf_simplified$share_chamois_percent <- as.numeric(suitability_sf_simplified$share_chamois_percent)
-suitability_sf_simplified$share_reddeer_percent <- as.numeric(suitability_sf_simplified$share_reddeer_percent)
-suitability_sf_simplified$share_roedeer_percent <- as.numeric(suitability_sf_simplified$share_roedeer_percent)
+suitability_sf_10_simplified$share_chamois_percent <- as.numeric(suitability_sf_10_simplified$share_chamois_percent)
+suitability_sf_10_simplified$share_reddeer_percent <- as.numeric(suitability_sf_10_simplified$share_reddeer_percent)
+suitability_sf_10_simplified$share_roedeer_percent <- as.numeric(suitability_sf_10_simplified$share_roedeer_percent)
 
+sf::st_write(
+  suitability_sf_10_simplified,
+  "/mnt/eo/WilDensity/output/suitability_per_revier_2611.shp",
+  delete_dsn = TRUE  # overwrite existing shapefile
+)
 
-ggplot(suitability_sf_simplified) +
+ggplot(suitability_sf_10_simplified) +
   geom_sf(aes(fill = share_chamois_percent)) +
-  scale_fill_viridis_c(option = "C", trans = "sqrt") +
+  scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
   theme_minimal() +
   labs(title = "Relative habitat suitability for chamois",
        fill = "Share of suitable area (%)")
@@ -323,7 +343,7 @@ ggplot(suitability_sf_simplified) +
 
 
 # Chamois
-ggplot(suitability_sf_simplified) +
+ggplot(suitability_sf_10_simplified) +
   geom_sf(aes(fill = share_chamois_percent)) +
   scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
   theme_minimal(base_size = 14) +
@@ -335,7 +355,7 @@ ggsave("/mnt/eo/WilDensity/_figs/chamois_relativ.png", width = 8, height = 6, un
 
 
 # Red deer
-ggplot(suitability_sf_simplified) +
+ggplot(suitability_sf_10_simplified) +
   geom_sf(aes(fill = share_reddeer_percent)) +
   scale_fill_viridis_c(option = "F", direction = -1, na.value = "grey90") +
   theme_minimal(base_size = 14) +
