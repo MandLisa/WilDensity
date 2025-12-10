@@ -13,7 +13,7 @@ df_sf <- st_read(
 
 # convert to data.table and remove geometry for speed
 df <- as.data.table(df_sf)
-df[, geometry := NULL]
+df[, geom := NULL]
 
 
 # =====================================================================
