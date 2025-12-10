@@ -11,7 +11,7 @@ df_sf <- st_read(
 
 # Convert to data.table (drops geometry for processing speed)
 df <- as.data.table(df_sf)
-df[, geometry := NULL]  # Remove geometry to speed up aggregation
+df[, geom := NULL]  # Remove geometry to speed up aggregation
 
 
 # --- 2) Expected years per province ------------------------------------------
