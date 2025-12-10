@@ -28,7 +28,7 @@ expected_years_stmk <- 1992:2024
 # =====================================================================
 yrs <- df[
   , .(years = list(sort(unique(year)))), 
-  by = .(hunt_site, prov)
+  by = .(hunt_site, prov.x)
 ]
 
 
@@ -36,8 +36,8 @@ yrs <- df[
 # 4) ASSIGN EXPECTED YEARS
 # =====================================================================
 yrs[
-  prov == "sbg",    expected_years := list(expected_years_sbg)
-][prov == "styria", expected_years := list(expected_years_stmk)
+  prov.x == "sbg",    expected_years := list(expected_years_sbg)
+][prov.x == "styria", expected_years := list(expected_years_stmk)
 ][is.na(expected_years), expected_years := list(integer(0))]
 
 
@@ -70,18 +70,18 @@ missing_tbl_species <- merge(
 )[
   , missing_years := vapply(missing_list, paste, collapse = ", ", FUN.VALUE = "")
 ][
-  order(prov, hunt_site)
+  order(prov.x, hunt_site)
 ][
-  , .(hunt_site, prov, species, missing_years, missing_n)
+  , .(hunt_site, prov.x, species, missing_years, missing_n)
 ]
 
 
 # =====================================================================
 # 7) HISTOGRAM OF MISSING YEARS PER SPECIES
 # =====================================================================
-ggplot(missing_tbl_species, aes(x = missing_n, fill = prov)) +
+ggplot(missing_tbl_species, aes(x = missing_n, fill = prov.x)) +
   geom_histogram(binwidth = 1, alpha = 0.6, color = "white") +
-  facet_wrap(~ species, scales = "free_y") +
+  facet_wrap(~ species) +
   labs(
     x = "Number of missing years",
     y = "Count of hunt sites",
