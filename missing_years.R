@@ -3,49 +3,64 @@ library(sf)
 library(ggplot2)
 library(gt)
 
-# --- 1) Load data -------------------------------------------------------------
+# =====================================================================
+# 1) LOAD DATA
+# =====================================================================
 df_sf <- st_read(
   "/mnt/eo/WilDensity/_data/_shp/count_per_rev_cleaned_1012.gpkg",
   layer = "rev_clean"
 )
 
-# Convert to data.table (drops geometry for processing speed)
+# convert to data.table and remove geometry for speed
 df <- as.data.table(df_sf)
-df[, geom := NULL]  # Remove geometry to speed up aggregation
+df[, geometry := NULL]
 
 
-# --- 2) Expected years per province ------------------------------------------
+# =====================================================================
+# 2) EXPECTED YEARS PER PROVINCE
+# =====================================================================
 expected_years_sbg  <- 1998:2024
 expected_years_stmk <- 1992:2024
 
 
-# --- 3) Extract existing years per hunt_site (FAST) ---------------------------
-# dt syntax: .(colname = expression) and by = grouping
+# =====================================================================
+# 3) EXTRACT EXISTING YEARS FOR EACH HUNT SITE
+# =====================================================================
 yrs <- df[
   , .(years = list(sort(unique(year)))), 
   by = .(hunt_site, prov)
 ]
 
 
-# --- 4) Compute missing years -------------------------------------------------
+# =====================================================================
+# 4) ASSIGN EXPECTED YEARS
+# =====================================================================
 yrs[
   prov == "sbg",    expected_years := list(expected_years_sbg)
 ][prov == "styria", expected_years := list(expected_years_stmk)
 ][is.na(expected_years), expected_years := list(integer(0))]
 
-# Compute missing list + counts
+
+# =====================================================================
+# 5) COMPUTE MISSING YEARS (two-step for data.table)
+# =====================================================================
+# Step 1: list of missing years
 yrs[
-  , `:=`(
-    missing_list = Map(setdiff, expected_years, years),
-    missing_n    = lengths(missing_list)
-  )
+  , missing_list := Map(setdiff, expected_years, years)
 ]
 
-# Keep only sites with missing years
+# Step 2: number of missing years
+yrs[
+  , missing_n := lengths(missing_list)
+]
+
+# Filter only sites with missing years
 missing_tbl <- yrs[missing_n > 0]
 
 
-# --- 5) Add species information back -----------------------------------------
+# =====================================================================
+# 6) ADD SPECIES INFORMATION
+# =====================================================================
 species_lookup <- unique(df[, .(hunt_site, species)])
 
 missing_tbl_species <- merge(
@@ -61,7 +76,9 @@ missing_tbl_species <- merge(
 ]
 
 
-# --- 6) Histogram plot --------------------------------------------------------
+# =====================================================================
+# 7) HISTOGRAM OF MISSING YEARS PER SPECIES
+# =====================================================================
 ggplot(missing_tbl_species, aes(x = missing_n, fill = prov)) +
   geom_histogram(binwidth = 1, alpha = 0.6, color = "white") +
   facet_wrap(~ species, scales = "free_y") +
