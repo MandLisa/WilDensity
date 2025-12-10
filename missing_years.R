@@ -89,3 +89,17 @@ ggplot(missing_tbl_species, aes(x = missing_n, fill = prov.x)) +
   ) +
   theme_minimal(base_size = 13) +
   theme(strip.text = element_text(face = "bold"))
+
+
+# =====================================================================
+# 8) Print hunt sites with missing years
+# =====================================================================
+setDT(missing_tbl_species)
+
+missing_tbl_species[
+  order(`prov.x`, hunt_site),
+  .(hunt_site, species, missing_years),
+  by = `prov.x`
+]
+
+
