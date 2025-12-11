@@ -8,7 +8,7 @@ df_sf <- st_read(
 )
 
 df <- as.data.table(df_sf)
-df[, geometry := NULL]
+df[, geom := NULL]
 
 # 2) Expected years
 expected_years_sbg  <- 1998:2024
