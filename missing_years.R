@@ -12,7 +12,7 @@ library(ggplot2)
 # =====================================================================
 
 # 1a) Density table (per hunt_site × species × year)
-dens <- fread("/mnt/eo/WilDensity/_data/_csv/density_hunt_site.csv")
+dens <- fread("/mnt/eo/WilDensity/_data/_csv/density_hunt_site_1212.csv")
 
 # 1b) GPKG with hunt_site, species, year, province etc.
 rev_sf <- st_read(
@@ -46,6 +46,9 @@ df_full <- merge(
   by = c("hunt_site", "species", "year"),
   all = TRUE   # FULL join
 )
+
+df_full <- df_full[!is.na(species)]
+
 
 # Now df_full contains:
 # hunt_site, species, year, prov.x, prov.y (plus maybe other cols; we ignore them)
