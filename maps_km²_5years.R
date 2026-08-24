@@ -412,8 +412,30 @@ theme_map <- theme_minimal(
 # 11. CREATE MAPS
 # =====================================================================
 
+overview_dir <- file.path(
+  output_dir,
+  "overview_png"
+)
+
+single_year_dir <- file.path(
+  output_dir,
+  "yearly_single_png"
+)
+
+dir.create(
+  overview_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  single_year_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
 for (sp in species_order) {
-  
   
   # -------------------------------------------------------------------
   # Species
@@ -424,26 +446,32 @@ for (sp in species_order) {
   
   
   sp_annual <- annual_sf %>%
-    
     filter(
       species == sp
     )
   
   
   sp_5yr <- mean_5yr_sf %>%
-    
     filter(
       species == sp
     )
   
   
+  # species-specific folder for individual yearly PNGs
+  sp_single_dir <- file.path(
+    single_year_dir,
+    sp
+  )
+  
+  dir.create(
+    sp_single_dir,
+    recursive = TRUE,
+    showWarnings = FALSE
+  )
+  
+  
   # -------------------------------------------------------------------
   # Common scale for annual + 5-year maps of the same species
-  #
-  # Use 99th percentile instead of absolute maximum.
-  # This prevents a few extreme hunt sites from compressing the
-  # colour scale for all other polygons.
-  # Values above the limit are squished to the maximum colour.
   # -------------------------------------------------------------------
   
   scale_max <- quantile(
@@ -454,7 +482,103 @@ for (sp in species_order) {
   
   
   # ===================================================================
-  # 11A. ANNUAL HARVEST DENSITY
+  # 11A. INDIVIDUAL YEARLY MAPS
+  # ===================================================================
+  
+  years_sp <- sort(
+    unique(sp_annual$year)
+  )
+  
+  for (yr in years_sp) {
+    
+    dat_year <- sp_annual %>%
+      filter(
+        year == yr
+      )
+    
+    p_year <- ggplot() +
+      
+      geom_sf(
+        data = prov_outline,
+        fill = "grey94",
+        linewidth = 0.12,
+        color = "grey45"
+      ) +
+      
+      geom_sf(
+        data = dat_year,
+        aes(
+          fill = harvest_density
+        ),
+        linewidth = 0.01,
+        color = NA
+      ) +
+      
+      scale_fill_distiller(
+        palette = "YlOrRd",
+        direction = 1,
+        limits = c(
+          0,
+          scale_max
+        ),
+        oob = squish,
+        na.value = "grey94",
+        name =
+          expression(
+            "Harvest density" ~
+              (n ~ km^{-2} ~ yr^{-1})
+          )
+      ) +
+      
+      coord_sf(
+        xlim = c(
+          full_bbox["xmin"],
+          full_bbox["xmax"]
+        ),
+        ylim = c(
+          full_bbox["ymin"],
+          full_bbox["ymax"]
+        ),
+        expand = FALSE
+      ) +
+      
+      labs(
+        title = paste0(
+          sp_label,
+          " harvest density"
+        ),
+        subtitle = paste0(
+          "Year: ",
+          yr
+        )
+      ) +
+      
+      theme_map
+    
+    ggsave(
+      filename = file.path(
+        sp_single_dir,
+        paste0(
+          "harvest_density_",
+          sp,
+          "_",
+          yr,
+          ".png"
+        )
+      ),
+      plot = p_year,
+      width = 9,
+      height = 10,
+      units = "in",
+      dpi = 600,
+      bg = "white",
+      limitsize = FALSE
+    )
+  }
+  
+  
+  # ===================================================================
+  # 11B. FACETED ANNUAL OVERVIEW
   # ===================================================================
   
   p_annual <- ggplot() +
@@ -476,21 +600,14 @@ for (sp in species_order) {
     ) +
     
     scale_fill_distiller(
-      
       palette = "YlOrRd",
       direction = 1,
-      
       limits = c(
         0,
         scale_max
       ),
-      
-      oob =
-        squish,
-      
-      na.value =
-        "grey94",
-      
+      oob = squish,
+      na.value = "grey94",
       name =
         expression(
           "Harvest density" ~
@@ -499,17 +616,14 @@ for (sp in species_order) {
     ) +
     
     coord_sf(
-      
       xlim = c(
         full_bbox["xmin"],
         full_bbox["xmax"]
       ),
-      
       ylim = c(
         full_bbox["ymin"],
         full_bbox["ymax"]
       ),
-      
       expand = FALSE
     ) +
     
@@ -519,91 +633,37 @@ for (sp in species_order) {
     ) +
     
     labs(
-      
-      title =
-        paste0(
-          sp_label,
-          " harvest density by year"
-        ),
-      
-      subtitle =
-        "Annual harvest per hunt-site area; 1992 excluded"
+      title = paste0(
+        sp_label,
+        " harvest density by year"
+      ),
+      subtitle = ""
     ) +
     
     theme_map
   
   
-  # High-resolution PNG
   ggsave(
-    
-    filename =
-      file.path(
-        output_dir,
-        paste0(
-          "overview_",
-          sp,
-          "_all_years_density_landscape.png"
-        )
-      ),
-    
-    plot =
-      p_annual,
-    
-    width =
-      28,
-    
-    height =
-      19,
-    
-    units =
-      "in",
-    
-    dpi =
-      600,
-    
-    bg =
-      "white",
-    
-    limitsize =
-      FALSE
-  )
-  
-  
-  # Vector PDF
-  ggsave(
-    
-    filename =
-      file.path(
-        output_dir,
-        paste0(
-          "overview_",
-          sp,
-          "_all_years_density_landscape.pdf"
-        )
-      ),
-    
-    plot =
-      p_annual,
-    
-    width =
-      28,
-    
-    height =
-      19,
-    
-    units =
-      "in",
-    
-    bg =
-      "white",
-    
-    limitsize =
-      FALSE
+    filename = file.path(
+      overview_dir,
+      paste0(
+        "overview_",
+        sp,
+        "_all_years_density_landscape.png"
+      )
+    ),
+    plot = p_annual,
+    width = 28,
+    height = 19,
+    units = "in",
+    dpi = 600,
+    bg = "white",
+    limitsize = FALSE
   )
   
   
   # ===================================================================
-  # 11B. MEAN HARVEST DENSITY PER 5-YEAR PERIOD
+  # 11C. MEAN HARVEST DENSITY PER 5-YEAR PERIOD
   # ===================================================================
   
   p_5yr <- ggplot() +
@@ -625,24 +685,14 @@ for (sp in species_order) {
     ) +
     
     scale_fill_distiller(
-      
-      palette =
-        "YlOrRd",
-      
-      direction =
-        1,
-      
+      palette = "YlOrRd",
+      direction = 1,
       limits = c(
         0,
         scale_max
       ),
-      
-      oob =
-        squish,
-      
-      na.value =
-        "grey94",
-      
+      oob = squish,
+      na.value = "grey94",
       name =
         expression(
           "Mean harvest density" ~
@@ -651,19 +701,15 @@ for (sp in species_order) {
     ) +
     
     coord_sf(
-      
       xlim = c(
         full_bbox["xmin"],
         full_bbox["xmax"]
       ),
-      
       ylim = c(
         full_bbox["ymin"],
         full_bbox["ymax"]
       ),
-      
-      expand =
-        FALSE
+      expand = FALSE
     ) +
     
     facet_wrap(
@@ -672,89 +718,32 @@ for (sp in species_order) {
     ) +
     
     labs(
-      
-      title =
-        paste0(
-          sp_label,
-          " mean harvest density"
-        ),
-      
-      subtitle =
-        paste0(
-          "Mean annual harvest density; 1992 excluded. ",
-          "Final interval contains 2023–2024 only."
-        )
+      title = paste0(
+        sp_label,
+        " mean harvest density"
+      ),
+      subtitle = ""
     ) +
     
     theme_map
   
   
-  # High-resolution PNG
   ggsave(
-    
-    filename =
-      file.path(
-        output_dir,
-        paste0(
-          "overview_",
-          sp,
-          "_5year_mean_density_landscape.png"
-        )
-      ),
-    
-    plot =
-      p_5yr,
-    
-    width =
-      22,
-    
-    height =
-      12,
-    
-    units =
-      "in",
-    
-    dpi =
-      600,
-    
-    bg =
-      "white",
-    
-    limitsize =
-      FALSE
-  )
-  
-  
-  # Vector PDF
-  ggsave(
-    
-    filename =
-      file.path(
-        output_dir,
-        paste0(
-          "overview_",
-          sp,
-          "_5year_mean_density_landscape.pdf"
-        )
-      ),
-    
-    plot =
-      p_5yr,
-    
-    width =
-      22,
-    
-    height =
-      12,
-    
-    units =
-      "in",
-    
-    bg =
-      "white",
-    
-    limitsize =
-      FALSE
+    filename = file.path(
+      overview_dir,
+      paste0(
+        "overview_",
+        sp,
+        "_5year_mean_density_landscape.png"
+      )
+    ),
+    plot = p_5yr,
+    width = 22,
+    height = 12,
+    units = "in",
+    dpi = 600,
+    bg = "white",
+    limitsize = FALSE
   )
   
   
@@ -765,77 +754,3 @@ for (sp in species_order) {
     sep = ""
   )
 }
-
-
-# =====================================================================
-# 12. SAVE DERIVED DATA
-# =====================================================================
-
-write.csv(
-  
-  annual_data %>%
-    
-    select(
-      poly_id,
-      hunt_site,
-      name,
-      prov,
-      species,
-      year,
-      n,
-      area_km2,
-      harvest_density
-    ),
-  
-  file.path(
-    output_dir,
-    "annual_harvest_density_by_revier.csv"
-  ),
-  
-  row.names = FALSE
-)
-
-
-write.csv(
-  
-  mean_5yr %>%
-    
-    select(
-      poly_id,
-      prov,
-      species,
-      period_5yr,
-      mean_harvest_density,
-      n_years
-    ),
-  
-  file.path(
-    output_dir,
-    "mean_harvest_density_by_5year_period.csv"
-  ),
-  
-  row.names = FALSE
-)
-
-
-# =====================================================================
-# 13. SUMMARY
-# =====================================================================
-
-cat("\n")
-cat("============================================================\n")
-cat("HARVEST DENSITY MAPS COMPLETE\n")
-cat("============================================================\n")
-cat("\nOutput directory:\n")
-cat(output_dir, "\n")
-
-cat("\nAnnual maps:\n")
-cat("  n / hunt-site area [km²]\n")
-
-cat("\nPeriod maps:\n")
-cat("  mean annual n / hunt-site area [km²]\n")
-
-cat("\n1992 excluded.\n")
-cat("PNG resolution: 600 dpi\n")
-cat("PDF output: vector graphics\n")
-cat("============================================================\n")
