@@ -1,5 +1,32 @@
 # =====================================================================
 # SHINY APP — UNGULATE HARVEST
+# FAST / LIGHTWEIGHT VERSION
+# =====================================================================
+#
+# Browser:
+#   - simplified geometries
+#   - lower rendering resolution
+#   - cached species / plot combinations
+#
+# Download:
+#   - full polygon geometries
+#   - 600 dpi PNG
+#
+# Metrics:
+#   - Harvest density [n / km²]
+#   - Absolute harvest [n]
+#
+# Displays:
+#   - Single year
+#   - Year series
+#   - Mean over selected period
+#
+# 1992 excluded.
+# =====================================================================
+
+
+# =====================================================================
+# 0. PACKAGES
 # =====================================================================
 
 library(shiny)
@@ -13,7 +40,6 @@ library(scales)
 # 1. SETTINGS
 # =====================================================================
 
-# Use interpolated final dataset
 input_gpkg <-
   "/mnt/eo/WilDensity/output/final_integer_allocation/interpolated_missing_reviere/final_revier_timeseries_complete_interpolated.gpkg"
 
@@ -21,8 +47,13 @@ input_layer <-
   "revier_timeseries"
 
 
-# Equal-area CRS for polygon area calculation
+# Equal-area CRS
 area_crs <- 3035
+
+
+# Simplification tolerance for browser display [m]
+# Increase to e.g. 150 if year series is still slow.
+simplify_tolerance <- 100
 
 
 species_labels <- c(
@@ -35,6 +66,9 @@ species_labels <- c(
 # =====================================================================
 # 2. READ DATA
 # =====================================================================
+
+cat("Reading input data...\n")
+
 
 x <- st_read(
   input_gpkg,
@@ -73,10 +107,11 @@ if (nrow(x) == 0) {
 
 
 # =====================================================================
-# 3. UNIQUE REVIER GEOMETRIES
+# 3. UNIQUE FULL-RESOLUTION REVIER GEOMETRIES
 # =====================================================================
 
-# Input is long: each polygon occurs repeatedly for species x year.
+cat("Preparing polygon geometries...\n")
+
 
 reviere_geom <- x %>%
   
@@ -92,23 +127,46 @@ reviere_geom <- x %>%
   )
 
 
+if (anyDuplicated(reviere_geom$poly_id) > 0) {
+  stop("poly_id is not unique.")
+}
+
+
+if (any(!st_is_valid(reviere_geom))) {
+  
+  reviere_geom <-
+    st_make_valid(
+      reviere_geom
+    )
+}
+
+
 # =====================================================================
-# 4. CALCULATE REVIER AREA [km²]
+# 4. TRANSFORM ONCE TO EPSG:3035
 # =====================================================================
 
-reviere_area <- st_transform(
-  reviere_geom,
-  area_crs
-)
+# Keeping all map geometries in the final plotting CRS avoids repeated
+# reprojection during Shiny rendering.
+
+reviere_geom_full <- reviere_geom %>%
+  
+  st_transform(
+    area_crs
+  )
 
 
-reviere_area$area_km2 <-
-  as.numeric(
-    st_area(reviere_area)
-  ) / 1e6
+# =====================================================================
+# 5. CALCULATE AREA [km²]
+# =====================================================================
 
-
-area_lookup <- reviere_area %>%
+area_lookup <- reviere_geom_full %>%
+  
+  mutate(
+    area_km2 =
+      as.numeric(
+        st_area(.)
+      ) / 1e6
+  ) %>%
   
   st_drop_geometry() %>%
   
@@ -127,15 +185,41 @@ invalid_area <- area_lookup %>%
 
 
 if (nrow(invalid_area) > 0) {
+  
   stop(
-    "At least one hunt-site polygon has missing or invalid area."
+    "At least one polygon has missing or invalid area."
   )
 }
 
 
 # =====================================================================
-# 5. PREPARE ANNUAL DATA
+# 6. SIMPLIFIED GEOMETRY FOR BROWSER DISPLAY
 # =====================================================================
+
+cat(
+  "Simplifying geometries for Shiny display (",
+  simplify_tolerance,
+  " m)...\n",
+  sep = ""
+)
+
+
+reviere_geom_app <- reviere_geom_full %>%
+  
+  st_simplify(
+    dTolerance = simplify_tolerance,
+    preserveTopology = TRUE
+  )
+
+
+# =====================================================================
+# 7. PREPARE ATTRIBUTE TABLE
+# =====================================================================
+
+# Important:
+# Do NOT carry thousands of repeated geometries through the Shiny
+# reactives. Keep attributes as an ordinary table and attach the
+# geometry only immediately before plotting.
 
 annual_data <- x %>%
   
@@ -163,7 +247,10 @@ annual_data <- x %>%
   )
 
 
-# Check uniqueness
+# =====================================================================
+# 8. CHECK UNIQUENESS
+# =====================================================================
+
 duplicate_check <- annual_data %>%
   
   count(
@@ -179,52 +266,72 @@ duplicate_check <- annual_data %>%
 
 
 if (nrow(duplicate_check) > 0) {
+  
+  print(
+    duplicate_check
+  )
+  
   stop(
     "Duplicate poly_id x species x year combinations found."
   )
 }
 
 
-# Attach geometry
-annual_sf <- reviere_geom %>%
-  
-  select(
-    poly_id
-  ) %>%
-  
-  left_join(
-    annual_data,
-    by = "poly_id",
-    relationship = "one-to-many"
-  )
-
-
 # =====================================================================
-# 6. PROVINCE OUTLINES
+# 9. PROVINCE OUTLINES
 # =====================================================================
 
-# sf::summarise() automatically unions geometries within province.
+# ---------------------------------------------------------------------
+# Full-resolution province outlines
+#
+# IMPORTANT:
+# Union the original valid polygons FIRST.
+# Simplifying individual polygons before st_union() can introduce
+# small topology problems along shared borders.
+# ---------------------------------------------------------------------
 
-prov_outline <- reviere_geom %>%
+prov_outline_full <- reviere_geom_full %>%
+  
+  st_make_valid() %>%
   
   group_by(
     prov
   ) %>%
   
   summarise(
+    do_union = TRUE,
     .groups = "drop"
   ) %>%
   
   st_make_valid()
 
 
+# ---------------------------------------------------------------------
+# Simplified province outlines for browser
+#
+# Simplify only AFTER the polygons have been unioned.
+# ---------------------------------------------------------------------
+
+prov_outline_app <- prov_outline_full %>%
+  
+  st_simplify(
+    dTolerance = simplify_tolerance,
+    preserveTopology = TRUE
+  ) %>%
+  
+  st_make_valid()
+
+
+# ---------------------------------------------------------------------
+# Common extent
+# ---------------------------------------------------------------------
+
 full_bbox <- st_bbox(
-  prov_outline
+  prov_outline_full
 )
 
-
 # =====================================================================
-# 7. MAP THEME
+# 10. MAP THEME
 # =====================================================================
 
 theme_map <- theme_minimal(
@@ -259,14 +366,12 @@ theme_map <- theme_minimal(
     
     plot.title =
       element_text(
-        size = 18,
+        size = 17,
         face = "bold"
       ),
     
     plot.subtitle =
-      element_text(
-        size = 11
-      ),
+      element_blank(),
     
     plot.title.position =
       "plot",
@@ -282,7 +387,7 @@ theme_map <- theme_minimal(
 
 
 # =====================================================================
-# 8. UI
+# 11. UI
 # =====================================================================
 
 ui <- fluidPage(
@@ -290,11 +395,12 @@ ui <- fluidPage(
   tags$head(
     
     tags$style(
+      
       HTML(
         "
         .sticky-sidebar {
           position: sticky;
-          top: 15px;
+          top: 10px;
           align-self: flex-start;
         }
 
@@ -304,6 +410,15 @@ ui <- fluidPage(
 
         .shiny-plot-output {
           width: 100%;
+        }
+
+        .container-fluid {
+          padding-top: 5px;
+        }
+
+        h2 {
+          margin-top: 5px;
+          margin-bottom: 10px;
         }
         "
       )
@@ -364,7 +479,7 @@ ui <- fluidPage(
         
         
         # -------------------------------------------------------------
-        # Display mode
+        # Display
         # -------------------------------------------------------------
         
         radioButtons(
@@ -452,37 +567,46 @@ ui <- fluidPage(
 
 
 # =====================================================================
-# 9. SERVER
+# 12. SERVER
 # =====================================================================
 
 server <- function(input, output, session) {
   
   
   # ===================================================================
-  # 9.1 SPECIES-SPECIFIC DATA
+  # 12.1 SPECIES DATA
   # ===================================================================
+  
+  # Plain dataframe -> much cheaper than manipulating sf objects.
   
   species_data <- reactive({
     
-    req(input$species)
+    req(
+      input$species
+    )
     
-    annual_sf %>%
+    
+    annual_data %>%
       
       filter(
-        species == input$species
+        species ==
+          input$species
       )
-  })
+    
+  }) %>%
+    
+    bindCache(
+      input$species
+    )
   
   
   # ===================================================================
-  # 9.2 AVAILABLE YEARS
+  # 12.2 AVAILABLE YEARS
   # ===================================================================
   
   available_years <- reactive({
     
     species_data() %>%
-      
-      st_drop_geometry() %>%
       
       pull(year) %>%
       
@@ -496,7 +620,9 @@ server <- function(input, output, session) {
     input$species,
     {
       
-      yrs <- available_years()
+      yrs <-
+        available_years()
+      
       
       req(
         length(yrs) > 0
@@ -515,7 +641,8 @@ server <- function(input, output, session) {
         current_year > max(yrs)
       ) {
         
-        current_year <- max(yrs)
+        current_year <-
+          max(yrs)
       }
       
       
@@ -547,13 +674,8 @@ server <- function(input, output, session) {
   
   
   # ===================================================================
-  # 9.3 COLOUR SCALE
+  # 12.3 CONSTANT COLOUR SCALE PER SPECIES + METRIC
   # ===================================================================
-  
-  # One constant colour scale per species + metric across all years.
-  #
-  # 99th percentile prevents a few extreme polygons from compressing
-  # the useful colour range.
   
   scale_max <- reactive({
     
@@ -562,7 +684,8 @@ server <- function(input, output, session) {
     )
     
     
-    dat <- species_data()
+    dat <-
+      species_data()
     
     
     if (
@@ -580,14 +703,15 @@ server <- function(input, output, session) {
     }
     
     
-    out <- as.numeric(
-      
-      quantile(
-        vals,
-        probs = 0.99,
-        na.rm = TRUE
+    out <-
+      as.numeric(
+        
+        quantile(
+          vals,
+          probs = 0.99,
+          na.rm = TRUE
+        )
       )
-    )
     
     
     if (
@@ -600,14 +724,20 @@ server <- function(input, output, session) {
     
     
     out
-  })
+    
+  }) %>%
+    
+    bindCache(
+      input$species,
+      input$metric
+    )
   
   
   # ===================================================================
-  # 9.4 PREPARE DATA FOR SELECTED VIEW
+  # 12.4 PREPARE ATTRIBUTE DATA FOR CURRENT VIEW
   # ===================================================================
   
-  plot_data <- reactive({
+  plot_table <- reactive({
     
     req(
       input$view_mode
@@ -675,14 +805,6 @@ server <- function(input, output, session) {
     
     # ---------------------------------------------------------------
     # MEAN OVER PERIOD
-    #
-    # For density:
-    #   mean annual n / km²
-    #
-    # For absolute harvest:
-    #   mean annual n
-    #
-    # Both are calculated here so the metric can be switched freely.
     # ---------------------------------------------------------------
     
     if (
@@ -695,59 +817,45 @@ server <- function(input, output, session) {
       )
       
       
-      mean_dat <- dat %>%
-        
-        st_drop_geometry() %>%
-        
-        filter(
-          year >=
-            input$year_range[1],
-          
-          year <=
-            input$year_range[2]
-        ) %>%
-        
-        group_by(
-          poly_id,
-          prov
-        ) %>%
-        
-        summarise(
-          
-          n =
-            mean(
-              n,
-              na.rm = TRUE
-            ),
-          
-          harvest_density =
-            mean(
-              harvest_density,
-              na.rm = TRUE
-            ),
-          
-          n_years =
-            n_distinct(year),
-          
-          .groups =
-            "drop"
-        )
-      
-      
-      mean_sf <- reviere_geom %>%
-        
-        select(
-          poly_id
-        ) %>%
-        
-        left_join(
-          mean_dat,
-          by = "poly_id"
-        )
-      
-      
       return(
-        mean_sf
+        
+        dat %>%
+          
+          filter(
+            year >=
+              input$year_range[1],
+            
+            year <=
+              input$year_range[2]
+          ) %>%
+          
+          group_by(
+            poly_id,
+            prov
+          ) %>%
+          
+          summarise(
+            
+            # Mean annual absolute harvest
+            n =
+              mean(
+                n,
+                na.rm = TRUE
+              ),
+            
+            # Mean annual harvest density
+            harvest_density =
+              mean(
+                harvest_density,
+                na.rm = TRUE
+              ),
+            
+            n_years =
+              n_distinct(year),
+            
+            .groups =
+              "drop"
+          )
       )
     }
     
@@ -757,7 +865,7 @@ server <- function(input, output, session) {
   
   
   # ===================================================================
-  # 9.5 DYNAMIC MAP HEIGHT
+  # 12.5 DYNAMIC MAP HEIGHT
   # ===================================================================
   
   map_height <- reactive({
@@ -767,7 +875,10 @@ server <- function(input, output, session) {
     )
     
     
-    # Single map and period mean
+    # Single map:
+    # avoid an unnecessarily tall output, otherwise coord_sf centres
+    # the map vertically and creates white space above it.
+    
     if (
       input$view_mode %in%
       c(
@@ -777,12 +888,15 @@ server <- function(input, output, session) {
     ) {
       
       return(
-        650
+        560
       )
     }
     
     
-    # Series
+    # ---------------------------------------------------------------
+    # YEAR SERIES
+    # ---------------------------------------------------------------
+    
     req(
       input$year_range
     )
@@ -794,7 +908,8 @@ server <- function(input, output, session) {
       1
     
     
-    ncol_facets <- 5
+    ncol_facets <-
+      5
     
     
     n_rows <-
@@ -805,11 +920,15 @@ server <- function(input, output, session) {
     
     
     max(
-      650,
-      n_rows * 260
+      560,
+      n_rows * 235
     )
   })
   
+  
+  # ===================================================================
+  # 12.6 MAP UI
+  # ===================================================================
   
   output$map_ui <- renderUI({
     
@@ -826,13 +945,21 @@ server <- function(input, output, session) {
   
   
   # ===================================================================
-  # 9.6 BUILD PLOT
+  # 12.7 FUNCTION TO BUILD MAP
   # ===================================================================
   
-  make_plot <- reactive({
+  # simplified = TRUE:
+  #   fast browser map
+  #
+  # simplified = FALSE:
+  #   full-resolution downloaded map
+  
+  build_plot <- function(
+    simplified = TRUE
+  ) {
     
     dat <-
-      plot_data()
+      plot_table()
     
     
     req(
@@ -847,6 +974,44 @@ server <- function(input, output, session) {
     
     
     # ---------------------------------------------------------------
+    # Select geometry
+    # ---------------------------------------------------------------
+    
+    if (simplified) {
+      
+      geom_use <-
+        reviere_geom_app
+      
+      outline_use <-
+        prov_outline_app
+      
+    } else {
+      
+      geom_use <-
+        reviere_geom_full
+      
+      outline_use <-
+        prov_outline_full
+    }
+    
+    
+    # ---------------------------------------------------------------
+    # Attach geometry only now
+    # ---------------------------------------------------------------
+    
+    map_data <- geom_use %>%
+      
+      select(
+        poly_id
+      ) %>%
+      
+      inner_join(
+        dat,
+        by = "poly_id"
+      )
+    
+    
+    # ---------------------------------------------------------------
     # Metric
     # ---------------------------------------------------------------
     
@@ -855,8 +1020,8 @@ server <- function(input, output, session) {
       "density"
     ) {
       
-      dat$plot_value <-
-        dat$harvest_density
+      map_data$plot_value <-
+        map_data$harvest_density
       
       
       metric_label <-
@@ -886,8 +1051,8 @@ server <- function(input, output, session) {
       
     } else {
       
-      dat$plot_value <-
-        dat$n
+      map_data$plot_value <-
+        map_data$n
       
       
       metric_label <-
@@ -917,20 +1082,20 @@ server <- function(input, output, session) {
     p <- ggplot() +
       
       geom_sf(
-        data = prov_outline,
+        data = outline_use,
         fill = "grey94",
-        linewidth = 0.12,
+        linewidth = 0.10,
         color = "grey45"
       ) +
       
       geom_sf(
-        data = dat,
+        data = map_data,
         
         aes(
           fill = plot_value
         ),
         
-        linewidth = 0.01,
+        linewidth = 0,
         color = NA
       ) +
       
@@ -966,7 +1131,11 @@ server <- function(input, output, session) {
         ),
         
         expand =
-          FALSE
+          FALSE,
+        
+        # No graticule / geographic datum calculations needed
+        datum =
+          NA
       )
     
     
@@ -982,7 +1151,6 @@ server <- function(input, output, session) {
       p <- p +
         
         labs(
-          
           title =
             paste0(
               sp_label,
@@ -990,10 +1158,7 @@ server <- function(input, output, session) {
               metric_label,
               " — ",
               input$year
-            ),
-          
-          subtitle =
-            ""
+            )
         )
     }
     
@@ -1015,7 +1180,6 @@ server <- function(input, output, session) {
         ) +
         
         labs(
-          
           title =
             paste0(
               sp_label,
@@ -1025,10 +1189,7 @@ server <- function(input, output, session) {
               input$year_range[1],
               "–",
               input$year_range[2]
-            ),
-          
-          subtitle =
-            ""
+            )
         )
     }
     
@@ -1045,7 +1206,6 @@ server <- function(input, output, session) {
       p <- p +
         
         labs(
-          
           title =
             paste0(
               sp_label,
@@ -1055,35 +1215,45 @@ server <- function(input, output, session) {
               input$year_range[1],
               "–",
               input$year_range[2]
-            ),
-          
-          subtitle =
-            ""
+            )
         )
     }
     
     
     p +
       theme_map
-  })
+  }
   
   
   # ===================================================================
-  # 9.7 DISPLAY MAP
+  # 12.8 DISPLAY — FAST SIMPLIFIED GEOMETRY
   # ===================================================================
   
   output$map <- renderPlot(
     
     {
-      make_plot()
+      build_plot(
+        simplified = TRUE
+      )
     },
     
-    res = 120
-  )
+    # Browser only — 80 dpi is sufficient and much faster
+    res = 80
+    
+  ) %>%
+    
+    bindCache(
+      input$species,
+      input$metric,
+      input$view_mode,
+      input$year,
+      input$year_range,
+      map_height()
+    )
   
   
   # ===================================================================
-  # 9.8 DOWNLOAD HIGH-RESOLUTION PNG
+  # 12.9 DOWNLOAD — FULL GEOMETRY / 600 DPI
   # ===================================================================
   
   output$download_map <- downloadHandler(
@@ -1157,7 +1327,7 @@ server <- function(input, output, session) {
     content = function(file) {
       
       # ---------------------------------------------------------------
-      # Output dimensions
+      # Export dimensions
       # ---------------------------------------------------------------
       
       if (
@@ -1200,13 +1370,30 @@ server <- function(input, output, session) {
       
       ggsave(
         filename = file,
-        plot = make_plot(),
-        width = width_out,
-        height = height_out,
-        units = "in",
-        dpi = 600,
-        bg = "white",
-        limitsize = FALSE
+        
+        # Full-resolution polygons for export
+        plot =
+          build_plot(
+            simplified = FALSE
+          ),
+        
+        width =
+          width_out,
+        
+        height =
+          height_out,
+        
+        units =
+          "in",
+        
+        dpi =
+          600,
+        
+        bg =
+          "white",
+        
+        limitsize =
+          FALSE
       )
     }
   )
@@ -1214,8 +1401,11 @@ server <- function(input, output, session) {
 
 
 # =====================================================================
-# 10. RUN APP
+# 13. RUN APP
 # =====================================================================
+
+cat("Starting Shiny app...\n")
+
 
 shinyApp(
   ui = ui,
