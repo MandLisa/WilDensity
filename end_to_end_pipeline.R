@@ -2600,8 +2600,7 @@ library(purrr)
 library(terra)
 library(exactextractr)
 library(ggplot2)
-library(scales)
-
+library(scal
 
 
 # =====================================================================
