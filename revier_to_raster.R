@@ -3,19 +3,18 @@
 # Hunting district x species x year -> continuous 100 m raster
 #
 # Workflow:
-#   1. Create 100 m raster
-#   2. Keep only species-specific suitable habitat
-#   3. Assign hunting-district harvest density to suitable pixels
-#   4. FALLBACK for districts with harvest but no suitable pixels:
-#        search suitable pixels within:
-#        500 m -> 1000 m -> 2000 m
-#        and distribute harvest there
-#   5. Spatial smoothing with OCTAGONAL moving window
-#   6. Temporal smoothing (e.g. t-1, t, t+1)
-#   7. Rescale to preserve annual total harvest
+#   1. Read final annual hunting-district harvest data
+#   2. Create a common 100 m grid in EPSG:3035
+#   3. Use binary species-specific suitability masks (1 = suitable)
+#   4. Distribute district harvest uniformly across suitable pixels
+#   5. Fallback for districts with positive harvest but zero suitable pixels:
+#        search suitable pixels within 500 -> 1000 -> 2000 m
+#   6. Spatial smoothing with an OCTAGONAL moving window
+#   7. Temporal smoothing (1 / 3 / 5 years)
+#   8. Rescale each species x year raster to preserve annual total harvest
 #
 # Output units:
-#   n / km² / year
+#   harvest density = n / km2 / year
 # =====================================================================
 
 
@@ -27,51 +26,34 @@ library(sf)
 library(terra)
 library(dplyr)
 
-
-terraOptions(
-  progress = 1
-)
+terraOptions(progress = 1)
 
 
 # =====================================================================
 # 1. SETTINGS
 # =====================================================================
 
-# ---------------------------------------------------------------------
-# Final complete hunting-district dataset
-# ---------------------------------------------------------------------
-
+# Final, interpolated hunting-district time series
 input_gpkg <-
   "/mnt/eo/WilDensity/output/final_integer_allocation/interpolated_missing_reviere/final_revier_timeseries_complete_interpolated.gpkg"
 
-input_layer <-
-  "revier_timeseries"
+input_layer <- "revier_timeseries"
 
 
-# ---------------------------------------------------------------------
 # Binary species-specific suitability rasters
-#
 # 1 = suitable
 # 0 = unsuitable
-# ---------------------------------------------------------------------
-
 suitability_files <- c(
-  
   roe_deer =
     "/mnt/eo/WilDensity/output/suitability_roe_deer_0311.tif",
-  
   red_deer =
     "/mnt/eo/WilDensity/output/suitability_red_deer_0311.tif",
-  
   chamois =
     "/mnt/eo/WilDensity/output/suitability_chamois_0311.tif"
 )
 
 
-# ---------------------------------------------------------------------
 # Output
-# ---------------------------------------------------------------------
-
 output_dir <-
   "/mnt/eo/WilDensity/output/continuous_harvest_density"
 
@@ -82,100 +64,59 @@ dir.create(
 )
 
 
-# ---------------------------------------------------------------------
 # Raster settings
-# ---------------------------------------------------------------------
-
-target_crs <-
-  "EPSG:3035"
-
-target_resolution_m <-
-  100
+target_crs <- "EPSG:3035"
+target_resolution_m <- 100
+cell_area_km2 <- (target_resolution_m^2) / 1e6
 
 
-# ---------------------------------------------------------------------
-# Spatial moving window
-#
-# Radius from centre to horizontal / vertical edge
-#
-# Examples:
-#   500
-#   1000
-#   2000
-#   5000
-# ---------------------------------------------------------------------
-
-spatial_radius_m <-
-  2000
+# Spatial moving-window radius
+# Start with 2000 m; later test e.g. 500, 1000, 2000, 5000 m.
+spatial_radius_m <- 2000
 
 
-# ---------------------------------------------------------------------
 # Temporal moving window
-#
-# 1 = t only
+# 1 = target year only
 # 3 = t-1, t, t+1
 # 5 = t-2, ..., t+2
-# ---------------------------------------------------------------------
-
-temporal_window_years <-
-  3
+temporal_window_years <- 3
 
 
-# FALSE:
-# first / last years use whatever neighbouring years are available
-#
-# TRUE:
-# years without a complete temporal window are skipped
-require_full_temporal_window <-
-  FALSE
+# If FALSE, edge years use the available neighbouring years.
+# If TRUE, edge years without a complete window are skipped.
+require_full_temporal_window <- FALSE
 
 
-# =====================================================================
-# FALLBACK SETTINGS
-# =====================================================================
-
-# For a district with:
-#
-#   harvest > 0
-#   BUT
-#   zero suitable pixels
-#
-# search suitable habitat progressively within these distances.
-
-fallback_radii_m <-
-  c(
-    500,
-    1000,
-    2000
-  )
+# Fallback search radii for districts with positive harvest
+# but no suitable 100 m pixel.
+fallback_radii_m <- c(500, 1000, 2000)
 
 
-# Keep fallback pixels in same province
-fallback_same_province <-
-  TRUE
-
-
-# ---------------------------------------------------------------------
-# Cell area
-# ---------------------------------------------------------------------
-
-cell_area_km2 <-
-  (target_resolution_m^2) / 1e6
+# Restrict fallback pixels to the same province.
+fallback_same_province <- TRUE
 
 
 # =====================================================================
 # 2. CHECK SETTINGS
 # =====================================================================
 
-if (
-  !temporal_window_years %in%
-  c(1, 3, 5)
-) {
-  
-  stop(
-    "temporal_window_years must be 1, 3 or 5."
-  )
+if (!temporal_window_years %in% c(1, 3, 5)) {
+  stop("temporal_window_years must be 1, 3 or 5.")
 }
+
+if (target_resolution_m <= 0) {
+  stop("target_resolution_m must be > 0.")
+}
+
+if (spatial_radius_m <= 0) {
+  stop("spatial_radius_m must be > 0.")
+}
+
+if (any(fallback_radii_m <= 0)) {
+  stop("All fallback_radii_m values must be > 0.")
+}
+
+fallback_radii_m <- sort(unique(fallback_radii_m))
 
 
 # =====================================================================
@@ -184,34 +125,29 @@ if (
 
 cat("Reading hunt data...\n")
 
-
 hunt_sf <- st_read(
   input_gpkg,
   layer = input_layer,
   quiet = TRUE
 ) %>%
-  
   mutate(
     poly_id = as.integer(poly_id),
     species = as.character(species),
-    year    = as.integer(year),
-    n       = as.numeric(n),
-    prov    = as.character(prov)
+    year = as.integer(year),
+    n = as.numeric(n),
+    prov = as.character(prov)
   ) %>%
-  
   filter(
     species %in% names(suitability_files),
     year != 1992
   )
 
+if (nrow(hunt_sf) == 0) {
+  stop("No hunting data found after filtering.")
+}
 
-if (
-  nrow(hunt_sf) == 0
-) {
-  
-  stop(
-    "No hunting data found."
-  )
+if (any(is.na(hunt_sf$poly_id))) {
+  stop("Missing poly_id values found in hunting data.")
 }
 
 
@@ -221,65 +157,29 @@ if (
 
 cat("Preparing hunting-district geometries...\n")
 
-
 reviere <- hunt_sf %>%
-  
-  arrange(
-    poly_id
-  ) %>%
-  
-  filter(
-    !duplicated(poly_id)
-  ) %>%
-  
-  select(
-    poly_id,
-    prov
-  ) %>%
-  
+  arrange(poly_id) %>%
+  filter(!duplicated(poly_id)) %>%
+  select(poly_id, prov) %>%
   st_make_valid() %>%
-  
-  st_transform(
-    target_crs
-  )
+  st_transform(target_crs)
 
-
-if (
-  anyDuplicated(
-    reviere$poly_id
-  ) > 0
-) {
-  
-  stop(
-    "poly_id is not unique."
-  )
+if (anyDuplicated(reviere$poly_id) > 0) {
+  stop("poly_id is not unique in the geometry table.")
 }
 
 
 # =====================================================================
-# 5. PROVINCE CODES
+# 5. PROVINCE LOOKUP
 # =====================================================================
 
 province_lookup <- reviere %>%
-  
   st_drop_geometry() %>%
-  
-  distinct(
-    prov
-  ) %>%
-  
-  arrange(
-    prov
-  ) %>%
-  
-  mutate(
-    prov_code =
-      row_number()
-  )
-
+  distinct(prov) %>%
+  arrange(prov) %>%
+  mutate(prov_code = row_number())
 
 reviere <- reviere %>%
-  
   left_join(
     province_lookup,
     by = "prov"
@@ -287,13 +187,11 @@ reviere <- reviere %>%
 
 
 # =====================================================================
-# 6. ATTRIBUTE TABLE
+# 6. ATTRIBUTE TABLE + CHECKS
 # =====================================================================
 
 hunt <- hunt_sf %>%
-  
   st_drop_geometry() %>%
-  
   select(
     poly_id,
     prov,
@@ -303,34 +201,18 @@ hunt <- hunt_sf %>%
   )
 
 
-# ---------------------------------------------------------------------
-# Check uniqueness
-# ---------------------------------------------------------------------
-
 duplicates <- hunt %>%
-  
   count(
     poly_id,
     species,
-    year
+    year,
+    name = "n_rows"
   ) %>%
-  
-  filter(
-    n > 1
-  )
+  filter(n_rows > 1)
 
-
-if (
-  nrow(duplicates) > 0
-) {
-  
-  print(
-    duplicates
-  )
-  
-  stop(
-    "Duplicate poly_id x species x year combinations."
-  )
+if (nrow(duplicates) > 0) {
+  print(duplicates)
+  stop("Duplicate poly_id x species x year combinations found.")
 }
 
 
@@ -338,210 +220,109 @@ if (
 # 7. CREATE 100 M TEMPLATE
 # =====================================================================
 
-cat("Creating 100 m raster template...\n")
+cat("Creating ", target_resolution_m, " m raster template...\n", sep = "")
 
-
-rev_v <-
-  vect(
-    reviere
-  )
-
-
-e <-
-  ext(
-    rev_v
-  )
-
+rev_v <- vect(reviere)
+e <- ext(rev_v)
 
 xmin_template <-
-  floor(
-    xmin(e) /
-      target_resolution_m
-  ) *
-  target_resolution_m
-
+  floor(xmin(e) / target_resolution_m) * target_resolution_m
 
 xmax_template <-
-  ceiling(
-    xmax(e) /
-      target_resolution_m
-  ) *
-  target_resolution_m
-
+  ceiling(xmax(e) / target_resolution_m) * target_resolution_m
 
 ymin_template <-
-  floor(
-    ymin(e) /
-      target_resolution_m
-  ) *
-  target_resolution_m
-
+  floor(ymin(e) / target_resolution_m) * target_resolution_m
 
 ymax_template <-
-  ceiling(
-    ymax(e) /
-      target_resolution_m
-  ) *
-  target_resolution_m
+  ceiling(ymax(e) / target_resolution_m) * target_resolution_m
 
 
 template <- rast(
-  
-  xmin =
-    xmin_template,
-  
-  xmax =
-    xmax_template,
-  
-  ymin =
-    ymin_template,
-  
-  ymax =
-    ymax_template,
-  
-  resolution =
-    target_resolution_m,
-  
-  crs =
-    target_crs
+  xmin = xmin_template,
+  xmax = xmax_template,
+  ymin = ymin_template,
+  ymax = ymax_template,
+  resolution = target_resolution_m,
+  crs = target_crs
 )
 
 
 # =====================================================================
-# 8. RASTERIZE DISTRICTS + PROVINCES
+# 8. RASTERIZE HUNTING DISTRICTS + PROVINCES
 # =====================================================================
 
 cat("Rasterizing hunting districts...\n")
-
 
 revier_id_raster <- rasterize(
   rev_v,
   template,
   field = "poly_id"
 )
-
-
-names(
-  revier_id_raster
-) <- "poly_id"
-
+names(revier_id_raster) <- "poly_id"
 
 province_raster <- rasterize(
   rev_v,
   template,
   field = "prov_code"
 )
-
-
-names(
-  province_raster
-) <- "prov_code"
+names(province_raster) <- "prov_code"
 
 
 # =====================================================================
-# 9. OCTAGONAL MOVING WINDOW
+# 9. OCTAGONAL MOVING-WINDOW KERNEL
 # =====================================================================
 
-make_octagon_kernel <- function(
-    radius_m,
-    resolution_m
-) {
+make_octagon_kernel <- function(radius_m, resolution_m) {
   
-  r <-
-    ceiling(
-      radius_m /
-        resolution_m
-    )
+  r_cells <- ceiling(radius_m / resolution_m)
+  coords <- -r_cells:r_cells
   
+  xx <- outer(
+    rep(1, length(coords)),
+    coords
+  )
   
-  xy <-
-    -r:r
+  yy <- outer(
+    coords,
+    rep(1, length(coords))
+  )
   
-  
-  xx <-
-    matrix(
-      rep(
-        xy,
-        each = length(xy)
-      ),
-      nrow = length(xy)
-    )
-  
-  
-  yy <-
-    t(xx)
-  
-  
-  # Regular octagon:
-  #
-  # square constraints:
-  #   |x| <= r
-  #   |y| <= r
-  #
-  # diagonal constraints:
-  #   |x| + |y| <= sqrt(2) * r
-  
+  # Regular-octagon approximation on the raster grid.
+  # The square corners are clipped by the diagonal constraint.
   inside <-
-    
-    abs(xx) <= r &
-    
-    abs(yy) <= r &
-    
-    (
-      abs(xx) +
-        abs(yy)
-    ) <=
-    sqrt(2) * r
+    abs(xx) <= r_cells &
+    abs(yy) <= r_cells &
+    (abs(xx) + abs(yy)) <= sqrt(2) * r_cells
   
+  weights <- matrix(
+    0,
+    nrow = length(coords),
+    ncol = length(coords)
+  )
   
-  weights <-
-    matrix(
-      0,
-      nrow = length(xy),
-      ncol = length(xy)
-    )
-  
-  
-  weights[
-    inside
-  ] <- 1
-  
+  weights[inside] <- 1
   
   weights
 }
 
 
 window_weights <- make_octagon_kernel(
-  
-  radius_m =
-    spatial_radius_m,
-  
-  resolution_m =
-    target_resolution_m
+  radius_m = spatial_radius_m,
+  resolution_m = target_resolution_m
 )
 
-
-cat("\nOctagonal moving window:\n")
-
+cat("Octagonal moving window:\n")
+cat("  radius: ", spatial_radius_m, " m\n", sep = "")
 cat(
-  "  radius:",
-  spatial_radius_m,
-  "m\n"
-)
-
-cat(
-  "  matrix:",
+  "  matrix: ",
   nrow(window_weights),
-  "x",
+  " x ",
   ncol(window_weights),
-  "\n"
+  " cells\n",
+  sep = ""
 )
-
-cat(
-  "  included pixels:",
-  sum(window_weights),
-  "\n"
-)
+cat("  included cells: ", sum(window_weights), "\n", sep = "")
 
 
 # =====================================================================
@@ -550,68 +331,44 @@ cat(
 
 spatial_smooth <- function(
     density_raster,
-    valid_habitat_mask,
+    output_habitat_mask,
     weights
 ) {
   
-  # -------------------------------------------------------------------
-  # Sum of density values in neighbourhood
-  # -------------------------------------------------------------------
+  # Count only pixels that actually contain a source value.
+  source_mask <- ifel(
+    !is.na(density_raster),
+    1,
+    NA
+  )
   
   numerator <- focal(
-    
     density_raster,
-    
-    w =
-      weights,
-    
-    fun =
-      "sum",
-    
-    na.rm =
-      TRUE
+    w = weights,
+    fun = "sum",
+    na.rm = TRUE
   )
-  
-  
-  # -------------------------------------------------------------------
-  # Number of suitable + valid pixels represented in neighbourhood
-  # -------------------------------------------------------------------
   
   denominator <- focal(
-    
-    valid_habitat_mask,
-    
-    w =
-      weights,
-    
-    fun =
-      "sum",
-    
-    na.rm =
-      TRUE
+    source_mask,
+    w = weights,
+    fun = "sum",
+    na.rm = TRUE
   )
   
+  out <- numerator / denominator
   
-  # -------------------------------------------------------------------
-  # Moving-window mean
-  # -------------------------------------------------------------------
+  out <- ifel(
+    denominator > 0,
+    out,
+    NA
+  )
   
-  out <-
-    numerator /
-    denominator
-  
-  
-  # Output only on suitable habitat
+  # Final values only on suitable habitat.
   out <- mask(
     out,
-    valid_habitat_mask
+    output_habitat_mask
   )
-  
-  
-  out[
-    denominator <= 0
-  ] <- NA
-  
   
   out
 }
@@ -621,18 +378,12 @@ spatial_smooth <- function(
 # 11. FALLBACK FUNCTION
 # =====================================================================
 #
-# For a district without suitable habitat:
+# Used only when a hunting district has:
+#   - positive harvest
+#   - zero suitable pixels
 #
-#   1. buffer polygon by 500 m
-#   2. search suitable pixels
-#   3. if none -> 1000 m
-#   4. if none -> 2000 m
-#
-# As soon as suitable pixels are found:
-#   stop search and return those pixels.
-#
-# If fallback_same_province = TRUE:
-#   only suitable pixels in the same province are allowed.
+# Search suitable pixels progressively within the specified radii.
+# The first radius with suitable cells is used.
 # =====================================================================
 
 find_fallback_cells <- function(
@@ -642,126 +393,95 @@ find_fallback_cells <- function(
     province_raster,
     rev_v,
     province_lookup,
-    search_radii
+    search_radii,
+    same_province = TRUE
 ) {
   
+  target_index <- which(
+    rev_v$poly_id == poly_id_target
+  )
   
-  target_polygon <-
-    rev_v[
-      rev_v$poly_id ==
-        poly_id_target,
-    ]
-  
-  
-  if (
-    nrow(target_polygon) != 1
-  ) {
-    
+  if (length(target_index) != 1) {
     stop(
-      "Could not uniquely identify polygon ",
-      poly_id_target
+      "Could not uniquely identify poly_id ",
+      poly_id_target,
+      ". Found ",
+      length(target_index),
+      " polygons."
     )
   }
   
+  target_polygon <- rev_v[target_index, ]
   
-  target_prov_code <-
-    province_lookup %>%
-    
-    filter(
-      prov ==
-        prov_target
-    ) %>%
-    
-    pull(
-      prov_code
+  province_match <- province_lookup %>%
+    filter(prov == prov_target)
+  
+  if (nrow(province_match) != 1) {
+    stop(
+      "Could not uniquely identify province code for ",
+      prov_target,
+      "."
     )
+  }
+  
+  target_prov_code <- province_match$prov_code[1]
   
   
-  for (
-    radius_now in search_radii
-  ) {
+  for (radius_now in search_radii) {
     
-    
-    buffer_polygon <- buffer(
+    buffer_polygon <- terra::buffer(
       target_polygon,
       width = radius_now
     )
     
-    
-    extracted <- extract(
-      
-      c(
-        habitat_mask,
-        province_raster
-      ),
-      
+    extracted <- terra::extract(
+      c(habitat_mask, province_raster),
       buffer_polygon,
-      
-      cells =
-        TRUE
-    ) %>%
-      
-      as.data.frame()
+      cells = TRUE
+    )
     
+    extracted <- as.data.frame(extracted)
     
-    if (
-      nrow(extracted) == 0
-    ) {
-      
+    if (nrow(extracted) == 0) {
       next
     }
     
-    
-    # ---------------------------------------------------------------
-    # Suitable pixels
-    # ---------------------------------------------------------------
+    # terra::extract() can include an ID column; we only use named fields.
+    if (!all(c("suitable", "prov_code", "cell") %in% names(extracted))) {
+      stop(
+        "Fallback extraction did not return the expected columns ",
+        "'suitable', 'prov_code' and 'cell'."
+      )
+    }
     
     extracted <- extracted %>%
-      
       filter(
+        !is.na(suitable),
         suitable == 1,
         !is.na(cell)
       )
     
-    
-    # ---------------------------------------------------------------
-    # Optional province restriction
-    # ---------------------------------------------------------------
-    
-    if (
-      fallback_same_province
-    ) {
-      
+    if (same_province) {
       extracted <- extracted %>%
-        
         filter(
-          prov_code ==
-            target_prov_code
+          !is.na(prov_code),
+          prov_code == target_prov_code
         )
     }
     
+    target_cells <- unique(extracted$cell)
+    target_cells <- target_cells[!is.na(target_cells)]
     
-    target_cells <- fallback_cells[[pid_character]]
-    
-    
-    if (
-      length(target_cells) > 0
-    ) {
-      
+    if (length(target_cells) > 0) {
       return(
         list(
-          radius_m =
-            radius_now,
-          
-          cells =
-            target_cells
+          radius_m = radius_now,
+          cells = target_cells
         )
       )
     }
   }
   
-  
-  # No suitable cells found
   NULL
 }
 
@@ -774,7 +494,7 @@ for (sp in names(suitability_files)) {
   
   cat("\n")
   cat("============================================================\n")
-  cat("SPECIES:", sp, "\n")
+  cat("SPECIES: ", sp, "\n", sep = "")
   cat("============================================================\n")
   
   
@@ -790,7 +510,9 @@ for (sp in names(suitability_files)) {
   spatial_tmp_dir <- file.path(
     species_dir,
     paste0(
-      "_spatial_tmp_octagon_",
+      "_spatial_tmp_",
+      target_resolution_m,
+      "m_octagon_",
       spatial_radius_m,
       "m"
     )
@@ -799,7 +521,9 @@ for (sp in names(suitability_files)) {
   final_dir <- file.path(
     species_dir,
     paste0(
-      "octagon_",
+      "resolution_",
+      target_resolution_m,
+      "m_octagon_",
       spatial_radius_m,
       "m_temporal_",
       temporal_window_years,
@@ -827,21 +551,32 @@ for (sp in names(suitability_files)) {
   
   
   # ===================================================================
-  # 12.2 READ SUITABILITY
+  # 12.2 READ + ALIGN SUITABILITY
   # ===================================================================
-  
-  cat("Reading suitability raster...\n")
   
   suitability_file <- unname(
     suitability_files[sp]
   )
   
+  if (
+    length(suitability_file) != 1 ||
+    is.na(suitability_file) ||
+    !file.exists(suitability_file)
+  ) {
+    stop(
+      "Suitability file not found for species ",
+      sp,
+      ": ",
+      suitability_file
+    )
+  }
+  
+  cat("Reading suitability raster: ", suitability_file, "\n", sep = "")
+  
   suitability_raw <- rast(
     suitability_file
   )
   
-  # Binary suitability:
-  # nearest neighbour preserves 0 / 1
   suitability <- project(
     suitability_raw,
     template,
@@ -853,9 +588,8 @@ for (sp in names(suitability_files)) {
   # 12.3 HABITAT MASK
   # ===================================================================
   
-  # 1  = suitable
-  # NA = unsuitable
-  
+  # 1  = suitable habitat
+  # NA = unsuitable habitat
   habitat_mask <- ifel(
     suitability == 1 &
       !is.na(revier_id_raster),
@@ -867,7 +601,7 @@ for (sp in names(suitability_files)) {
   
   
   # ===================================================================
-  # 12.4 COUNT SUITABLE PIXELS PER DISTRICT
+  # 12.4 SUITABLE PIXELS / AREA PER DISTRICT
   # ===================================================================
   
   suitable_counts <- zonal(
@@ -881,6 +615,14 @@ for (sp in names(suitability_files)) {
     suitable_counts
   )
   
+  if (ncol(suitable_counts) < 2) {
+    stop(
+      "Could not calculate suitable pixel counts for species ",
+      sp,
+      "."
+    )
+  }
+  
   names(suitable_counts)[1:2] <- c(
     "poly_id",
     "n_suitable_pixels"
@@ -889,19 +631,14 @@ for (sp in names(suitability_files)) {
   suitable_counts <- suitable_counts %>%
     mutate(
       poly_id = as.integer(poly_id),
-      
-      n_suitable_pixels = as.numeric(
-        n_suitable_pixels
-      ),
-      
-      n_suitable_pixels = coalesce(
+      n_suitable_pixels = as.numeric(n_suitable_pixels),
+      n_suitable_pixels = ifelse(
+        is.finite(n_suitable_pixels),
         n_suitable_pixels,
         0
       ),
-      
       suitable_area_km2 =
-        n_suitable_pixels *
-        cell_area_km2
+        n_suitable_pixels * cell_area_km2
     )
   
   
@@ -910,22 +647,21 @@ for (sp in names(suitability_files)) {
   # ===================================================================
   
   sp_hunt <- hunt %>%
-    filter(
-      species == sp
-    ) %>%
+    filter(species == sp) %>%
     left_join(
       suitable_counts,
       by = "poly_id"
     ) %>%
     mutate(
-      n_suitable_pixels = coalesce(
-        n_suitable_pixels,
-        0
+      n_suitable_pixels = ifelse(
+        is.na(n_suitable_pixels),
+        0,
+        n_suitable_pixels
       ),
-      
-      suitable_area_km2 = coalesce(
-        suitable_area_km2,
-        0
+      suitable_area_km2 = ifelse(
+        is.na(suitable_area_km2),
+        0,
+        suitable_area_km2
       )
     )
   
@@ -934,29 +670,18 @@ for (sp in names(suitability_files)) {
   # 12.6 FIND DISTRICTS THAT NEED FALLBACK
   # ===================================================================
   
-  # Fallback:
-  # district has positive harvest in at least one year
-  # but zero suitable pixels
-  
   fallback_districts <- sp_hunt %>%
     group_by(
       poly_id,
       prov
     ) %>%
     summarise(
-      suitable_area_km2 =
-        first(suitable_area_km2),
-      
-      max_harvest =
-        ifelse(
-          all(is.na(n)),
-          NA_real_,
-          max(
-            n,
-            na.rm = TRUE
-          )
-        ),
-      
+      suitable_area_km2 = first(suitable_area_km2),
+      max_harvest = ifelse(
+        all(is.na(n)),
+        NA_real_,
+        max(n, na.rm = TRUE)
+      ),
       .groups = "drop"
     ) %>%
     filter(
@@ -966,9 +691,10 @@ for (sp in names(suitability_files)) {
     )
   
   cat(
-    "Fallback districts:",
+    "Fallback districts: ",
     nrow(fallback_districts),
-    "\n"
+    "\n",
+    sep = ""
   )
   
   
@@ -976,15 +702,7 @@ for (sp in names(suitability_files)) {
   # 12.7 FIND FALLBACK PIXELS
   # ===================================================================
   
-  # Named list:
-  #
-  # fallback_cells["615"]
-  #
-  # contains the suitable target cells for poly_id 615.
-  #
-  # NOTE:
-  # This entire chunk intentionally avoids [[ ]] syntax.
-  
+  # Named-list access is handled without double-bracket indexing.
   fallback_cells <- list()
   fallback_diagnostics <- list()
   fallback_diagnostics_df <- data.frame()
@@ -1004,7 +722,6 @@ for (sp in names(suitability_files)) {
         sep = ""
       )
       
-      
       result <- find_fallback_cells(
         poly_id_target = pid,
         prov_target = pprov,
@@ -1012,16 +729,11 @@ for (sp in names(suitability_files)) {
         province_raster = province_raster,
         rev_v = rev_v,
         province_lookup = province_lookup,
-        search_radii = fallback_radii_m
+        search_radii = fallback_radii_m,
+        same_province = fallback_same_province
       )
       
-      
-      # ---------------------------------------------------------------
-      # Nothing found
-      # ---------------------------------------------------------------
-      
       if (is.null(result)) {
-        
         stop(
           "No suitable fallback pixels found within ",
           max(fallback_radii_m),
@@ -1033,19 +745,12 @@ for (sp in names(suitability_files)) {
         )
       }
       
-      
-      # ---------------------------------------------------------------
-      # Store cell IDs
-      # ---------------------------------------------------------------
+      result_cells <- result$cells
+      result_radius <- result$radius_m
       
       fallback_cells[as.character(pid)] <- list(
-        result$cells
+        result_cells
       )
-      
-      
-      # ---------------------------------------------------------------
-      # Store diagnostics
-      # ---------------------------------------------------------------
       
       fallback_diagnostics <- append(
         fallback_diagnostics,
@@ -1054,21 +759,19 @@ for (sp in names(suitability_files)) {
             species = sp,
             poly_id = pid,
             prov = pprov,
-            fallback_radius_m = result$radius_m,
-            n_target_pixels = length(result$cells),
+            fallback_radius_m = result_radius,
+            n_target_pixels = length(result_cells),
             target_area_km2 =
-              length(result$cells) *
-              cell_area_km2
+              length(result_cells) * cell_area_km2
           )
         )
       )
       
-      
       cat(
         "  -> radius: ",
-        result$radius_m,
+        result_radius,
         " m | suitable pixels: ",
-        length(result$cells),
+        length(result_cells),
         "\n",
         sep = ""
       )
@@ -1077,7 +780,7 @@ for (sp in names(suitability_files)) {
   
   
   # ===================================================================
-  # 12.7B SAVE FALLBACK DIAGNOSTICS
+  # 12.8 SAVE FALLBACK DIAGNOSTICS
   # ===================================================================
   
   if (length(fallback_diagnostics) > 0) {
@@ -1098,26 +801,27 @@ for (sp in names(suitability_files)) {
   
   
   # ===================================================================
-  # 12.8 AVAILABLE YEARS
+  # 12.9 AVAILABLE YEARS
   # ===================================================================
   
   years <- sp_hunt %>%
+    filter(!is.na(year)) %>%
     pull(year) %>%
     unique() %>%
     sort()
   
   if (length(years) == 0) {
-    
     stop(
       "No years available for species ",
-      sp
+      sp,
+      "."
     )
   }
   
   cat(
     "Years: ",
     min(years),
-    "–",
+    "-",
     max(years),
     "\n",
     sep = ""
@@ -1125,7 +829,7 @@ for (sp in names(suitability_files)) {
   
   
   # ===================================================================
-  # 13. CREATE SPATIAL RASTER FOR EACH YEAR
+  # 13. CREATE SPATIALLY SMOOTHED RASTER FOR EACH YEAR
   # ===================================================================
   
   fallback_year_log <- list()
@@ -1134,7 +838,7 @@ for (sp in names(suitability_files)) {
   for (yr in years) {
     
     cat(
-      "\nSpatial smoothing: ",
+      "Spatial smoothing: ",
       sp,
       " ",
       yr,
@@ -1144,27 +848,18 @@ for (sp in names(suitability_files)) {
     
     
     # -----------------------------------------------------------------
-    # Annual data
+    # 13.1 ANNUAL DATA
     # -----------------------------------------------------------------
     
     yr_data <- sp_hunt %>%
-      filter(
-        year == yr
-      )
+      filter(year == yr)
     
     if (nrow(yr_data) == 0) {
       next
     }
     
-    
-    # -----------------------------------------------------------------
-    # Active hunting districts in this year
-    # -----------------------------------------------------------------
-    
     active_ids <- unique(
-      yr_data$poly_id[
-        !is.na(yr_data$poly_id)
-      ]
+      yr_data$poly_id[!is.na(yr_data$poly_id)]
     )
     
     if (length(active_ids) == 0) {
@@ -1172,20 +867,16 @@ for (sp in names(suitability_files)) {
     }
     
     
+    # -----------------------------------------------------------------
+    # 13.2 ACTIVE DISTRICTS + SUITABLE HABITAT IN THIS YEAR
+    # -----------------------------------------------------------------
+    
     active_raster <- subst(
       revier_id_raster,
       from = active_ids,
-      to = rep(
-        1,
-        length(active_ids)
-      ),
+      to = rep(1, length(active_ids)),
       others = NA
     )
-    
-    
-    # -----------------------------------------------------------------
-    # Suitable habitat in active hunting districts
-    # -----------------------------------------------------------------
     
     year_habitat_mask <- ifel(
       habitat_mask == 1 &
@@ -1196,20 +887,15 @@ for (sp in names(suitability_files)) {
     
     names(year_habitat_mask) <- "suitable"
     
-    
-    # -----------------------------------------------------------------
-    # Hunting district IDs on suitable habitat
-    # -----------------------------------------------------------------
-    
     revier_suitable_year <- mask(
       revier_id_raster,
       year_habitat_mask
     )
     
     
-    # =================================================================
-    # 13.1 STANDARD DISTRICTS
-    # ===================================================================
+    # -----------------------------------------------------------------
+    # 13.3 STANDARD DISTRICTS
+    # -----------------------------------------------------------------
     
     regular_yr_data <- yr_data %>%
       filter(
@@ -1218,14 +904,9 @@ for (sp in names(suitability_files)) {
       ) %>%
       mutate(
         district_density =
-          n /
-          suitable_area_km2
+          n / suitable_area_km2
       )
     
-    
-    # -----------------------------------------------------------------
-    # Initial density raster
-    # -----------------------------------------------------------------
     
     if (nrow(regular_yr_data) > 0) {
       
@@ -1238,46 +919,31 @@ for (sp in names(suitability_files)) {
       
     } else {
       
-      density_raster <- ifel(
-        !is.na(year_habitat_mask),
-        NA,
-        NA
-      )
+      density_raster <- year_habitat_mask * NA_real_
     }
     
     names(density_raster) <- "harvest_density"
     
     
-    # =================================================================
-    # 13.2 ADD FALLBACK HARVEST
-    # =================================================================
+    # -----------------------------------------------------------------
+    # 13.4 ADD FALLBACK HARVEST
+    # -----------------------------------------------------------------
     
     if (length(fallback_cells) > 0) {
       
       for (pid_character in names(fallback_cells)) {
         
-        pid <- as.integer(
-          pid_character
-        )
-        
-        
-        # -------------------------------------------------------------
-        # Harvest of this fallback district in target year
-        # -------------------------------------------------------------
+        pid <- as.integer(pid_character)
         
         fallback_n <- yr_data %>%
-          filter(
-            poly_id == pid
-          ) %>%
+          filter(poly_id == pid) %>%
           pull(n)
-        
         
         if (length(fallback_n) == 0) {
           next
         }
         
         fallback_n <- fallback_n[1]
-        
         
         if (
           is.na(fallback_n) ||
@@ -1286,94 +952,45 @@ for (sp in names(suitability_files)) {
           next
         }
         
-        
-        # -------------------------------------------------------------
-        # Retrieve fallback cells
-        #
-        # No [[ ]] syntax.
-        # -------------------------------------------------------------
-        
         target_cells <- unlist(
           fallback_cells[pid_character],
           use.names = FALSE
         )
         
-        
-        if (length(target_cells) == 0) {
-          
-          stop(
-            "Fallback cell vector is empty for poly_id ",
-            pid
-          )
-        }
-        
-        
-        # -------------------------------------------------------------
-        # Keep only suitable cells that are active in this target year
-        # -------------------------------------------------------------
-        
-        target_status <- as.numeric(
-          year_habitat_mask[target_cells]
+        target_cells <- unique(
+          as.integer(target_cells)
         )
         
         target_cells <- target_cells[
-          !is.na(target_status)
+          !is.na(target_cells)
         ]
         
-        
         if (length(target_cells) == 0) {
-          
           stop(
-            "No active suitable fallback cells remain for poly_id ",
+            "Fallback cell vector is empty for poly_id ",
             pid,
-            " in year ",
-            yr,
             "."
           )
         }
         
-        
-        # -------------------------------------------------------------
-        # Density increment
-        #
-        # fallback harvest / fallback habitat area
-        #
-        # units = n / km²
-        # -------------------------------------------------------------
+        # The fallback cells were already selected from suitable habitat
+        # and restricted to the same province. Because the final dataset
+        # is complete within each province's observation period, no extra
+        # year-specific filtering of these cells is required.
         
         fallback_density_increment <-
           fallback_n /
-          (
-            length(target_cells) *
-              cell_area_km2
-          )
-        
-        
-        # -------------------------------------------------------------
-        # Existing pixel values
-        # -------------------------------------------------------------
+          (length(target_cells) * cell_area_km2)
         
         old_values <- as.numeric(
           density_raster[target_cells]
         )
         
-        old_values[
-          is.na(old_values)
-        ] <- 0
-        
-        
-        # -------------------------------------------------------------
-        # Add fallback contribution
-        # -------------------------------------------------------------
+        old_values[is.na(old_values)] <- 0
         
         density_raster[target_cells] <-
-          old_values +
-          fallback_density_increment
+          old_values + fallback_density_increment
         
-        
-        # -------------------------------------------------------------
-        # Fallback radius for log
-        # -------------------------------------------------------------
         
         fallback_radius_now <- NA_real_
         
@@ -1385,19 +1002,13 @@ for (sp in names(suitability_files)) {
           )
           
           if (!is.na(radius_position)) {
-            
             fallback_radius_now <-
-              fallback_diagnostics_df$
-              fallback_radius_m[
+              fallback_diagnostics_df$fallback_radius_m[
                 radius_position
               ]
           }
         }
         
-        
-        # -------------------------------------------------------------
-        # Log fallback assignment
-        # -------------------------------------------------------------
         
         fallback_year_log <- append(
           fallback_year_log,
@@ -1407,16 +1018,13 @@ for (sp in names(suitability_files)) {
               year = yr,
               poly_id = pid,
               harvest_n = fallback_n,
-              fallback_radius_m =
-                fallback_radius_now,
-              n_target_pixels =
-                length(target_cells),
+              fallback_radius_m = fallback_radius_now,
+              n_target_pixels = length(target_cells),
               fallback_density_increment =
                 fallback_density_increment
             )
           )
         )
-        
         
         cat(
           "  fallback poly_id ",
@@ -1432,20 +1040,46 @@ for (sp in names(suitability_files)) {
     }
     
     
-    # =================================================================
-    # 13.3 SPATIAL OCTAGONAL MOVING WINDOW
-    # =================================================================
+    # -----------------------------------------------------------------
+    # 13.5 CHECK INITIAL ANNUAL TOTAL
+    # -----------------------------------------------------------------
+    
+    initial_total <- global(
+      density_raster * cell_area_km2,
+      fun = "sum",
+      na.rm = TRUE
+    )[1, 1]
+    
+    target_total_initial <- yr_data %>%
+      summarise(
+        total = sum(n, na.rm = TRUE)
+      ) %>%
+      pull(total)
+    
+    cat(
+      "  before smoothing: district total = ",
+      round(target_total_initial, 4),
+      " | raster total = ",
+      round(initial_total, 4),
+      "\n",
+      sep = ""
+    )
+    
+    
+    # -----------------------------------------------------------------
+    # 13.6 OCTAGONAL SPATIAL MOVING WINDOW
+    # -----------------------------------------------------------------
     
     spatial_raster <- spatial_smooth(
       density_raster = density_raster,
-      valid_habitat_mask = year_habitat_mask,
+      output_habitat_mask = year_habitat_mask,
       weights = window_weights
     )
     
     
-    # =================================================================
-    # 13.4 SAVE TEMPORARY SPATIAL RASTER
-    # =================================================================
+    # -----------------------------------------------------------------
+    # 13.7 SAVE TEMPORARY SPATIAL RASTER
+    # -----------------------------------------------------------------
     
     spatial_file <- file.path(
       spatial_tmp_dir,
@@ -1456,7 +1090,6 @@ for (sp in names(suitability_files)) {
         "_spatial_octagon.tif"
       )
     )
-    
     
     writeRaster(
       spatial_raster,
@@ -1507,7 +1140,7 @@ for (sp in names(suitability_files)) {
   for (yr in years) {
     
     cat(
-      "\nTemporal smoothing: ",
+      "Temporal smoothing: ",
       sp,
       " ",
       yr,
@@ -1517,7 +1150,7 @@ for (sp in names(suitability_files)) {
     
     
     # -----------------------------------------------------------------
-    # Temporal neighbourhood
+    # 15.1 TEMPORAL NEIGHBOURHOOD
     # -----------------------------------------------------------------
     
     desired_years <- seq(
@@ -1525,29 +1158,19 @@ for (sp in names(suitability_files)) {
       yr + half_window
     )
     
-    available_window_years <-
-      desired_years[
-        desired_years %in% years
-      ]
+    available_window_years <- desired_years[
+      desired_years %in% years
+    ]
     
     
     if (
       require_full_temporal_window &&
-      length(available_window_years) <
-      temporal_window_years
+      length(available_window_years) < temporal_window_years
     ) {
-      
-      cat(
-        "  skipped: incomplete temporal window\n"
-      )
-      
+      cat("  skipped: incomplete temporal window\n")
       next
     }
     
-    
-    # -----------------------------------------------------------------
-    # Existing spatial raster files
-    # -----------------------------------------------------------------
     
     temporal_files <- file.path(
       spatial_tmp_dir,
@@ -1563,40 +1186,32 @@ for (sp in names(suitability_files)) {
       temporal_files
     )
     
-    available_window_years <-
-      available_window_years[
-        files_exist
-      ]
+    available_window_years <- available_window_years[
+      files_exist
+    ]
     
-    temporal_files <-
-      temporal_files[
-        files_exist
-      ]
+    temporal_files <- temporal_files[
+      files_exist
+    ]
     
     
     if (length(temporal_files) == 0) {
-      
       warning(
         "No spatial rasters available for ",
         sp,
         " ",
-        yr
+        yr,
+        "."
       )
-      
       next
     }
     
     
     if (
       require_full_temporal_window &&
-      length(temporal_files) <
-      temporal_window_years
+      length(temporal_files) < temporal_window_years
     ) {
-      
-      cat(
-        "  skipped: incomplete temporal raster window\n"
-      )
-      
+      cat("  skipped: incomplete temporal raster window\n")
       next
     }
     
@@ -1613,19 +1228,12 @@ for (sp in names(suitability_files)) {
     
     
     # -----------------------------------------------------------------
-    # Read neighbouring years
+    # 15.2 TEMPORAL MEAN
     # -----------------------------------------------------------------
     
     temporal_stack <- rast(
       temporal_files
     )
-    
-    
-    # -----------------------------------------------------------------
-    # Temporal moving mean
-    #
-    # Works for 1, 2, 3, 5 etc. layers.
-    # -----------------------------------------------------------------
     
     temporally_smoothed <- mean(
       temporal_stack,
@@ -1633,14 +1241,12 @@ for (sp in names(suitability_files)) {
     )
     
     
-    # =================================================================
-    # 15.1 TARGET-YEAR HABITAT MASK
-    # =================================================================
+    # -----------------------------------------------------------------
+    # 15.3 TARGET-YEAR HABITAT MASK
+    # -----------------------------------------------------------------
     
     target_year_ids <- sp_hunt %>%
-      filter(
-        year == yr
-      ) %>%
+      filter(year == yr) %>%
       pull(poly_id) %>%
       unique()
     
@@ -1648,22 +1254,16 @@ for (sp in names(suitability_files)) {
       !is.na(target_year_ids)
     ]
     
-    
     if (length(target_year_ids) == 0) {
       next
     }
     
-    
     target_active_raster <- subst(
       revier_id_raster,
       from = target_year_ids,
-      to = rep(
-        1,
-        length(target_year_ids)
-      ),
+      to = rep(1, length(target_year_ids)),
       others = NA
     )
-    
     
     target_year_habitat <- ifel(
       habitat_mask == 1 &
@@ -1672,8 +1272,6 @@ for (sp in names(suitability_files)) {
       NA
     )
     
-    
-    # Only suitable habitat of target year
     temporally_smoothed <- mask(
       temporally_smoothed,
       target_year_habitat
@@ -1681,25 +1279,16 @@ for (sp in names(suitability_files)) {
     
     
     # =================================================================
-    # 16. RESTORE TOTAL HARVEST OF TARGET YEAR
+    # 16. RESTORE ANNUAL TOTAL HARVEST
     # =================================================================
     
     target_total <- sp_hunt %>%
-      filter(
-        year == yr
-      ) %>%
+      filter(year == yr) %>%
       summarise(
-        total = sum(
-          n,
-          na.rm = TRUE
-        )
+        total = sum(n, na.rm = TRUE)
       ) %>%
       pull(total)
     
-    
-    # -----------------------------------------------------------------
-    # Target year has zero total harvest
-    # -----------------------------------------------------------------
     
     if (
       is.na(target_total) ||
@@ -1716,24 +1305,16 @@ for (sp in names(suitability_files)) {
       
     } else {
       
-      
-      # ---------------------------------------------------------------
-      # Current raster total
-      # ---------------------------------------------------------------
-      
       current_total <- global(
-        temporally_smoothed *
-          cell_area_km2,
+        temporally_smoothed * cell_area_km2,
         fun = "sum",
         na.rm = TRUE
       )[1, 1]
-      
       
       if (
         !is.finite(current_total) ||
         current_total <= 0
       ) {
-        
         stop(
           "Invalid raster total for ",
           sp,
@@ -1742,25 +1323,17 @@ for (sp in names(suitability_files)) {
           ". Target total = ",
           target_total,
           "; raster total = ",
-          current_total
+          current_total,
+          "."
         )
       }
       
-      
-      # ---------------------------------------------------------------
-      # Conservation correction
-      # ---------------------------------------------------------------
-      
       correction_factor <-
-        target_total /
-        current_total
-      
+        target_total / current_total
       
       final_raster <-
-        temporally_smoothed *
-        correction_factor
+        temporally_smoothed * correction_factor
     }
-    
     
     names(final_raster) <- "harvest_density"
     
@@ -1778,7 +1351,6 @@ for (sp in names(suitability_files)) {
         ".tif"
       )
     )
-    
     
     writeRaster(
       final_raster,
@@ -1800,33 +1372,23 @@ for (sp in names(suitability_files)) {
     # =================================================================
     
     final_total <- global(
-      final_raster *
-        cell_area_km2,
+      final_raster * cell_area_km2,
       fun = "sum",
       na.rm = TRUE
     )[1, 1]
     
-    
     cat(
       "  original total = ",
-      round(
-        target_total,
-        2
-      ),
-      " | raster total = ",
-      round(
-        final_total,
-        2
-      ),
+      round(target_total, 4),
+      " | final raster total = ",
+      round(final_total, 4),
       " | correction factor = ",
       ifelse(
         is.na(correction_factor),
         "NA",
-        as.character(
-          round(
-            correction_factor,
-            4
-          )
+        format(
+          round(correction_factor, 6),
+          scientific = FALSE
         )
       ),
       "\n",
@@ -1835,9 +1397,8 @@ for (sp in names(suitability_files)) {
   }
   
   
-  cat("\n")
   cat(
-    "Finished: ",
+    "Finished species: ",
     sp,
     "\n",
     sep = ""
@@ -1853,24 +1414,17 @@ cat("\n")
 cat("============================================================\n")
 cat("ALL SPECIES COMPLETE\n")
 cat("============================================================\n")
-cat("Resolution:             ", target_resolution_m, " m\n")
+cat("Resolution:             ", target_resolution_m, " m\n", sep = "")
 cat("Spatial window:         octagon\n")
-cat("Spatial radius:         ", spatial_radius_m, " m\n")
-cat("Temporal window:        ", temporal_window_years, " years\n")
+cat("Spatial radius:         ", spatial_radius_m, " m\n", sep = "")
+cat("Temporal window:        ", temporal_window_years, " years\n", sep = "")
 cat("Suitable habitat only:  yes\n")
 cat(
   "Fallback radii:        ",
-  paste(
-    fallback_radii_m,
-    collapse = ", "
-  ),
+  paste(fallback_radii_m, collapse = ", "),
   " m\n",
   sep = ""
 )
-cat(
-  "Fallback same province:",
-  fallback_same_province,
-  "\n"
-)
-cat("Output:                 ", output_dir, "\n")
+cat("Fallback same province: ", fallback_same_province, "\n", sep = "")
+cat("Output:                 ", output_dir, "\n", sep = "")
 cat("============================================================\n")
