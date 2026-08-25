@@ -22,7 +22,7 @@
 # -----------
 # harvest density = n / km² / year
 #
-# IMPORTANT
+# IMPORTANT!
 # ---------
 # Only suitable habitat receives final raster values.
 # =====================================================================
