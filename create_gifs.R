@@ -9,10 +9,10 @@ library(viridisLite)
 # =====================================================================
 
 raster_dir <-
-  "/mnt/eo/WilDensity/output/continuous_harvest_density/red_deer/octagon_2000m_temporal_3yr"
+  "/mnt/eo/WilDensity/output/continuous_harvest_density_5y/red_deer/octagon_1880m_temporal_5yr"
 
 output_gif <-
-  "/mnt/eo/WilDensity/output/continuous_harvest_density/red_deer/red_deer_octagon_2000m_temporal_3y.gif"
+  "/mnt/eo/WilDensity/output/continuous_harvest_density_5y/red_deer/red_deer_octagon_1880m_temporal_5yr.gif"
 
 frame_dir <-
   "/mnt/eo/WilDensity/output/continuous_harvest_density/red_deer/gif_frames"
@@ -168,6 +168,7 @@ for (i in seq_along(files)) {
   
   r <- rast(files[i])
   
+  # Cap only for plotting
   r_plot <- clamp(
     r,
     lower = 0,
@@ -175,6 +176,7 @@ for (i in seq_along(files)) {
     values = TRUE
   )
   
+  # Sequential numbering is important for ffmpeg
   frame_file <- file.path(
     frame_dir,
     sprintf(
@@ -186,23 +188,13 @@ for (i in seq_along(files)) {
   png(
     filename = frame_file,
     width = 1700,
-    height = 1350,
+    height = 1200,
     res = 150,
     bg = "white"
   )
   
-  layout(
-    matrix(c(1, 2), ncol = 1),
-    heights = c(10, 2)
-  )
-  
-  
-  # -------------------------------------------------------------------
-  # Top: map
-  # -------------------------------------------------------------------
-  
   par(
-    mar = c(1, 2, 4, 2)
+    mar = c(2, 2, 4, 4)
   )
   
   plot(
@@ -211,7 +203,14 @@ for (i in seq_along(files)) {
     breaks = breaks,
     axes = FALSE,
     box = FALSE,
-    legend = FALSE,
+    legend = TRUE,
+    plg = list(
+      title = expression(
+        "Harvest density" ~
+          (n ~ km^{-2} ~ yr^{-1})
+      ),
+      cex = 1.4
+    ),
     main = paste0(
       "Red deer harvest density — ",
       yr
@@ -230,92 +229,7 @@ for (i in seq_along(files)) {
     "",
     side = 3,
     line = 0.4,
-    cex = 1.1
-  )
-  
-  
-  # -------------------------------------------------------------------
-  # Bottom: horizontal legend
-  # -------------------------------------------------------------------
-  
-  par(
-    mar = c(1, 4, 1, 4)
-  )
-  
-  plot.new()
-  
-  plot.window(
-    xlim = c(0, 1),
-    ylim = c(0, 1)
-  )
-  
-  x_left   <- 0.15
-  x_right  <- 0.85
-  y_bottom <- 0.42
-  y_top    <- 0.62
-  
-  x_seq <- seq(
-    x_left,
-    x_right,
-    length.out = n_colors + 1
-  )
-  
-  for (j in seq_len(n_colors)) {
-    rect(
-      xleft = x_seq[j],
-      ybottom = y_bottom,
-      xright = x_seq[j + 1],
-      ytop = y_top,
-      col = cols[j],
-      border = NA
-    )
-  }
-  
-  rect(
-    xleft = x_left,
-    ybottom = y_bottom,
-    xright = x_right,
-    ytop = y_top,
-    border = "black",
-    lwd = 0.8
-  )
-  
-  tick_vals <- pretty(
-    c(0, scale_max),
-    n = 5
-  )
-  
-  tick_vals <- tick_vals[
-    tick_vals >= 0 &
-      tick_vals <= scale_max
-  ]
-  
-  tick_pos <- x_left +
-    (tick_vals / scale_max) *
-    (x_right - x_left)
-  
-  segments(
-    x0 = tick_pos,
-    y0 = y_bottom,
-    x1 = tick_pos,
-    y1 = y_bottom - 0.05,
-    lwd = 0.8
-  )
-  
-  text(
-    x = tick_pos,
-    y = y_bottom - 0.10,
-    labels = round(tick_vals, 1),
-    cex = 1.1
-  )
-  
-  text(
-    x = 0.5,
-    y = 0.82,
-    labels = expression(
-      "Harvest density" ~ (n ~ km^{-2} ~ yr^{-1})
-    ),
-    cex = 1.3
+    cex = 1
   )
   
   dev.off()
