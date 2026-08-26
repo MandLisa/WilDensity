@@ -190,17 +190,23 @@ forest_type <- rast(forest_tif)
 
 
 # ---------------------------------------------------------------------
-# 3. Crop DEM to bounding box of forest-type raster
+# 3. Get bounding box of forest-type raster
 # ---------------------------------------------------------------------
 
-# Bounding box as polygon
 bbox <- as.polygons(ext(forest_type))
 crs(bbox) <- crs(forest_type)
 
-# Transform bounding box to DEM CRS
-bbox_dem <- project(bbox, crs(dem))
+# Transform bounding box into DEM CRS
+bbox_dem <- project(
+  bbox,
+  crs(dem)
+)
 
-# Crop DEM to bounding box
+
+# ---------------------------------------------------------------------
+# 4. Crop DEM to bounding box
+# ---------------------------------------------------------------------
+
 dem_crop <- crop(
   dem,
   bbox_dem
@@ -208,18 +214,29 @@ dem_crop <- crop(
 
 
 # ---------------------------------------------------------------------
-# 4. Resample/reproject DEM to 100 m forest-type grid
+# 5. Create EMPTY 100 m template
+# ---------------------------------------------------------------------
+
+template_100m <- rast(
+  ext = ext(forest_type),
+  resolution = 100,
+  crs = crs(forest_type)
+)
+
+
+# ---------------------------------------------------------------------
+# 6. Reproject/resample DEM to 100 m
 # ---------------------------------------------------------------------
 
 dem_100m <- project(
   dem_crop,
-  forest_type,
+  template_100m,
   method = "bilinear"
 )
 
 
 # ---------------------------------------------------------------------
-# 5. Calculate slope
+# 7. Calculate slope
 # ---------------------------------------------------------------------
 
 slope_100m <- terrain(
@@ -233,7 +250,7 @@ names(slope_100m) <- "slope"
 
 
 # ---------------------------------------------------------------------
-# 6. Save
+# 8. Save
 # ---------------------------------------------------------------------
 
 writeRaster(
@@ -242,5 +259,3 @@ writeRaster(
   datatype = "FLT4S",
   overwrite = TRUE
 )
-
-
