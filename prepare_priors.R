@@ -163,3 +163,84 @@ writeRaster(
   datatype = "FLT4S",
   overwrite = TRUE
 )
+
+
+
+# =====================================================================
+# PRIOR 3: SLOPE
+# =====================================================================
+
+library(terra)
+
+# ---------------------------------------------------------------------
+# 1. Paths and settings
+# ---------------------------------------------------------------------
+
+input_dem  <- "/mnt/dss_europe/misc/dem_glo30/glo30_dem.vrt"
+forest_tif <- "/mnt/eo/WilDensity/_data/_priors/CORINE_forest_types.tif"
+output_tif <- "/mnt/eo/WilDensity/_data/_priors/slope_100m.tif"
+
+
+# ---------------------------------------------------------------------
+# 2. Load data
+# ---------------------------------------------------------------------
+
+dem <- rast(input_dem)
+forest_type <- rast(forest_tif)
+
+
+# ---------------------------------------------------------------------
+# 3. Crop DEM to bounding box of forest-type raster
+# ---------------------------------------------------------------------
+
+# Bounding box as polygon
+bbox <- as.polygons(ext(forest_type))
+crs(bbox) <- crs(forest_type)
+
+# Transform bounding box to DEM CRS
+bbox_dem <- project(bbox, crs(dem))
+
+# Crop DEM to bounding box
+dem_crop <- crop(
+  dem,
+  bbox_dem
+)
+
+
+# ---------------------------------------------------------------------
+# 4. Resample/reproject DEM to 100 m forest-type grid
+# ---------------------------------------------------------------------
+
+dem_100m <- project(
+  dem_crop,
+  forest_type,
+  method = "bilinear"
+)
+
+
+# ---------------------------------------------------------------------
+# 5. Calculate slope
+# ---------------------------------------------------------------------
+
+slope_100m <- terrain(
+  dem_100m,
+  v = "slope",
+  unit = "degrees",
+  neighbors = 8
+)
+
+names(slope_100m) <- "slope"
+
+
+# ---------------------------------------------------------------------
+# 6. Save
+# ---------------------------------------------------------------------
+
+writeRaster(
+  slope_100m,
+  output_tif,
+  datatype = "FLT4S",
+  overwrite = TRUE
+)
+
+
